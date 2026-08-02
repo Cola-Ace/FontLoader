@@ -150,6 +150,36 @@ describe("App", () => {
     expect(wrapper.text()).toContain("加载成功 1 个");
   });
 
+  it("dismisses a failed operation notice automatically", async () => {
+    vi.useFakeTimers();
+    try {
+      mockInitial(emptySnapshot());
+      open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
+      invoke.mockImplementation((command: string) => {
+        if (command === "get_initial_state") {
+          return Promise.resolve(emptySnapshot());
+        }
+        if (command === "load_fonts") {
+          return Promise.reject(new Error("加载失败"));
+        }
+        return Promise.resolve(undefined);
+      });
+      const wrapper = mount(App);
+      await flushPromises();
+
+      await wrapper.get(".button-primary").trigger("click");
+      await flushPromises();
+
+      expect(wrapper.text()).toContain("加载失败");
+      vi.advanceTimersByTime(3000);
+      await flushPromises();
+      expect(wrapper.find(".operation-status").exists()).toBe(false);
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("unloads checked rows in one batch", async () => {
     mockInitial({ ...emptySnapshot(), fonts: [font] });
     const wrapper = mount(App);

@@ -116,6 +116,10 @@ function summarizeResult(result: BatchResult, action: "加载" | "卸载") {
   }
   statusMessage.value = messages.join("，");
   operationErrors.value = result.errors;
+  scheduleStatusDismiss();
+}
+
+function scheduleStatusDismiss() {
   clearStatusTimer();
   statusDismissTimer = window.setTimeout(() => {
     statusMessage.value = "";
@@ -179,6 +183,17 @@ async function runBatch(
     const result = await invoke<BatchResult>(command, args);
     applySnapshot(result.snapshot);
     summarizeResult(result, command === "unload_fonts" ? "卸载" : "加载");
+  } catch (error) {
+    const action = command === "unload_fonts" ? "卸载" : "加载";
+    statusMessage.value = `${action}失败`;
+    operationErrors.value = [
+      {
+        path: "",
+        code: "operation_failed",
+        message: String(error),
+      },
+    ];
+    scheduleStatusDismiss();
   } finally {
     busy.value = false;
     operationProgress.value = null;

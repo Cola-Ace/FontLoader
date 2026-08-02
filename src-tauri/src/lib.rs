@@ -40,6 +40,7 @@ struct AppState {
     core: Arc<FontCore>,
     window_status: Mutex<WindowStatus>,
     window_bounds: Mutex<Option<WindowBounds>>,
+    exit_requested: AtomicBool,
     exiting: AtomicBool,
 }
 
@@ -49,6 +50,7 @@ impl AppState {
             core: Arc::new(core),
             window_status: Mutex::new(WindowStatus::Creating),
             window_bounds: Mutex::new(None),
+            exit_requested: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
         }
     }
@@ -134,21 +136,35 @@ async fn request_exit(
     state: State<'_, AppState>,
     force: bool,
 ) -> Result<ExitResult, String> {
+    if state.exit_requested.swap(true, Ordering::SeqCst) {
+        return Ok(ExitResult {
+            exiting: false,
+            errors: state.core.snapshot().exit_errors,
+        });
+    }
     let total = state.core.snapshot().fonts.len();
     emit_batch_progress(&app, "unload", 0, total);
     let core = Arc::clone(&state.core);
     let progress_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = match tauri::async_runtime::spawn_blocking(move || {
         core.prepare_exit_with_progress(force, |completed| {
             emit_batch_progress(&progress_app, "unload", completed, total);
         })
     })
     .await
-    .map_err(|error| error.to_string())?;
+    {
+        Ok(result) => result,
+        Err(error) => {
+            state.exit_requested.store(false, Ordering::SeqCst);
+            return Err(error.to_string());
+        }
+    };
     if result.exiting {
         state.exiting.store(true, Ordering::SeqCst);
         let app_handle = app.clone();
         let _ = app.run_on_main_thread(move || app_handle.exit(0));
+    } else {
+        state.exit_requested.store(false, Ordering::SeqCst);
     }
     Ok(result)
 }
@@ -198,6 +214,9 @@ fn create_main_window(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
+    if state.exit_requested.load(Ordering::SeqCst) {
+        return;
+    }
     let mut status = state.window_status.lock().unwrap();
     if *status != WindowStatus::Closed {
         return;
@@ -222,6 +241,12 @@ fn create_main_window(app: &AppHandle) {
             .and_then(|builder| builder.build())
         {
             Ok(window) => {
+                let state = app.state::<AppState>();
+                if state.exit_requested.load(Ordering::SeqCst) {
+                    *state.window_status.lock().unwrap() = WindowStatus::Closed;
+                    let _ = window.destroy();
+                    return;
+                }
                 if let Some(bounds) = *app.state::<AppState>().window_bounds.lock().unwrap() {
                     let _ = window.set_position(Position::Physical(bounds.position));
                     let _ = window.set_size(Size::Physical(bounds.size));
@@ -241,6 +266,9 @@ fn open_main_window(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
+    if state.exit_requested.load(Ordering::SeqCst) {
+        return;
+    }
     let mut status = state.window_status.lock().unwrap();
 
     match *status {
@@ -305,13 +333,58 @@ fn destroy_minimized_window(app: &AppHandle) {
 }
 
 fn request_application_exit(app: AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if state.exit_requested.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let has_loaded_fonts = !state.core.snapshot().fonts.is_empty();
+    let window_destroy_requested = if has_loaded_fonts {
+        match app.get_webview_window("main") {
+            Some(window) => {
+                {
+                    let mut status = state.window_status.lock().unwrap();
+                    if !matches!(*status, WindowStatus::Closed) {
+                        *status = WindowStatus::Destroying { reopen: false };
+                    }
+                }
+                if window.destroy().is_err() {
+                    *state.window_status.lock().unwrap() = WindowStatus::Open;
+                    false
+                } else {
+                    true
+                }
+            }
+            None => {
+                *state.window_status.lock().unwrap() = WindowStatus::Closed;
+                false
+            }
+        }
+    } else {
+        false
+    };
+
     std::thread::spawn(move || {
+        if window_destroy_requested {
+            while app.get_webview_window("main").is_some() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let state = app.state::<AppState>();
+            let mut status = state.window_status.lock().unwrap();
+            if matches!(*status, WindowStatus::Destroying { .. }) {
+                *status = WindowStatus::Closed;
+            }
+        }
+
         let state = app.state::<AppState>();
         let result = state.core.prepare_exit(false);
         if result.exiting {
             state.exiting.store(true, Ordering::SeqCst);
             app.exit(0);
         } else {
+            state.exit_requested.store(false, Ordering::SeqCst);
             open_main_window(&app);
         }
     });
