@@ -2,6 +2,7 @@
 node_modules/
 .pnpm-store/
 .pnpm-home/
+package-lock.json
 
 # Build output
 dist/
