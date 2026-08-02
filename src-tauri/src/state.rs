@@ -73,7 +73,7 @@ impl FontCore {
 
         for requested_path in paths {
             'item: {
-                let canonical = match PathBuf::from(&requested_path).canonicalize() {
+                let canonical = match dunce::canonicalize(&requested_path) {
                     Ok(path) => path,
                     Err(error) => {
                         result.errors.push(operation_error(
