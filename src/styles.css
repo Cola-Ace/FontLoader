@@ -368,7 +368,7 @@ time {
   z-index: 10;
   top: 78px;
   right: 20px;
-  width: min(420px, calc(100vw - 40px));
+  width: min(360px, calc(100vw - 40px));
   padding: 12px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;

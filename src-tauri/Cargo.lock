@@ -988,6 +988,7 @@ name = "font-loader"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dunce",
  "serde",
  "serde_json",
  "tauri",

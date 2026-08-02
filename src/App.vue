@@ -40,6 +40,7 @@ const operationProgress = ref<BatchProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
 const theme = ref<"light" | "dark">("light");
 let stopProgressListener: (() => void) | undefined;
+let statusDismissTimer: number | undefined;
 
 const filteredFonts = computed(() => {
   const term = searchTerm.value.trim().toLocaleLowerCase();
@@ -115,6 +116,25 @@ function summarizeResult(result: BatchResult, action: "加载" | "卸载") {
   }
   statusMessage.value = messages.join("，");
   operationErrors.value = result.errors;
+  clearStatusTimer();
+  statusDismissTimer = window.setTimeout(() => {
+    statusMessage.value = "";
+    operationErrors.value = [];
+    statusDismissTimer = undefined;
+  }, 3000);
+}
+
+function clearStatusTimer() {
+  if (statusDismissTimer !== undefined) {
+    window.clearTimeout(statusDismissTimer);
+    statusDismissTimer = undefined;
+  }
+}
+
+function dismissStatus() {
+  clearStatusTimer();
+  statusMessage.value = "";
+  operationErrors.value = [];
 }
 
 function applyTheme(nextTheme: "light" | "dark") {
@@ -146,6 +166,7 @@ async function runBatch(
   args: Record<string, unknown> = {},
 ) {
   busy.value = true;
+  clearStatusTimer();
   operationErrors.value = [];
   operationProgress.value = {
     operation: operationFor(command),
@@ -254,6 +275,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopProgressListener?.();
+  clearStatusTimer();
 });
 </script>
 
@@ -401,7 +423,7 @@ onUnmounted(() => {
             type="button"
             aria-label="关闭提示"
             title="关闭提示"
-            @click="statusMessage = ''; operationErrors = []"
+            @click="dismissStatus"
           >
             <X :size="14" />
           </button>
