@@ -14,6 +14,8 @@ It loads `.ttf`, `.otf`, and `.ttc` files through the Windows session-level font
 - Offer a one-time restore action for fonts from the previous session.
 - Unload managed fonts before the application exits.
 
+> When closing, FontLoader destroys the WebView first and unloads managed fonts in the background. The process may remain briefly after the window closes and will exit automatically when cleanup finishes. This is expected.
+
 ## Requirements
 
 - Windows 10 version 1803 or later, or Windows 11 (currently targeting x64).
