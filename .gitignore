@@ -23,3 +23,9 @@ plan/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# AI Agents
+.claude/
+.codex/
+CLAUDE.md
+AGENTS.md
