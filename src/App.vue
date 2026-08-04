@@ -39,8 +39,30 @@ const statusMessage = ref("");
 const operationProgress = ref<BatchProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
 const theme = ref<"light" | "dark">("light");
+type SortMode = "name-asc" | "name-desc" | "loaded-at-asc" | "loaded-at-desc";
+
+const sortMode = ref<SortMode>("name-asc");
 let stopProgressListener: (() => void) | undefined;
 let statusDismissTimer: number | undefined;
+
+const faceLabel = (font: FontEntry) =>
+  font.faces.map(face => `${face.family} · ${face.style}`).join("；");
+
+const nameCollator = new Intl.Collator("zh-CN", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function compareFontName(left: FontEntry, right: FontEntry) {
+  const byName = nameCollator.compare(faceLabel(left), faceLabel(right));
+  if (byName !== 0) {
+    return byName;
+  }
+  const byFileName = nameCollator.compare(left.fileName, right.fileName);
+  return byFileName !== 0
+    ? byFileName
+    : nameCollator.compare(left.canonicalPath, right.canonicalPath);
+}
 
 const filteredFonts = computed(() => {
   const term = searchTerm.value.trim().toLocaleLowerCase();
@@ -58,14 +80,25 @@ const filteredFonts = computed(() => {
   });
 });
 
+const sortedFonts = computed(() => {
+  const fonts = [...filteredFonts.value];
+  if (sortMode.value === "name-asc" || sortMode.value === "name-desc") {
+    const direction = sortMode.value === "name-asc" ? 1 : -1;
+    return fonts.sort((left, right) => compareFontName(left, right) * direction);
+  }
+
+  const direction = sortMode.value === "loaded-at-asc" ? 1 : -1;
+  return fonts.sort((left, right) => {
+    const byLoadedAt = (Date.parse(left.loadedAt) - Date.parse(right.loadedAt)) * direction;
+    return byLoadedAt !== 0 ? byLoadedAt : compareFontName(left, right);
+  });
+});
+
 const allVisibleSelected = computed(
   () =>
     filteredFonts.value.length > 0 &&
     filteredFonts.value.every(font => selectedPaths.value.has(font.canonicalPath)),
 );
-
-const faceLabel = (font: FontEntry) =>
-  font.faces.map(face => `${face.family} · ${face.style}`).join("；");
 
 const loadedTime = (value: string) =>
   new Intl.DateTimeFormat("zh-CN", {
@@ -354,16 +387,28 @@ onUnmounted(() => {
 
     <main class="content">
       <div class="list-toolbar">
-        <label class="select-all">
-          <input
-            type="checkbox"
-            :checked="allVisibleSelected"
-            :disabled="filteredFonts.length === 0"
-            aria-label="全选当前列表"
-            @change="toggleAllVisible(($event.target as HTMLInputElement).checked)"
-          />
-          <span>全选</span>
-        </label>
+        <div class="list-toolbar-start">
+          <label class="select-all">
+            <input
+              type="checkbox"
+              :checked="allVisibleSelected"
+              :disabled="filteredFonts.length === 0"
+              aria-label="全选当前列表"
+              @change="toggleAllVisible(($event.target as HTMLInputElement).checked)"
+            />
+            <span>全选</span>
+          </label>
+
+          <label class="sort-control">
+            <span>排序</span>
+            <select v-model="sortMode" data-testid="font-sort" aria-label="字体排序">
+              <option value="name-asc">名称（升序）</option>
+              <option value="name-desc">名称（降序）</option>
+              <option value="loaded-at-asc">加载时间（升序）</option>
+              <option value="loaded-at-desc">加载时间（降序）</option>
+            </select>
+          </label>
+        </div>
 
         <button
           class="button button-danger-quiet"
@@ -391,7 +436,7 @@ onUnmounted(() => {
         </div>
 
         <div
-          v-for="font in filteredFonts"
+          v-for="font in sortedFonts"
           :key="font.canonicalPath"
           class="font-row"
           data-testid="font-row"

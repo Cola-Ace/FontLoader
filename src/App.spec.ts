@@ -78,6 +78,42 @@ describe("App", () => {
     expect(wrapper.text()).toContain("恢复");
   });
 
+  it("sorts fonts by name and loaded time in both directions", async () => {
+    const older = {
+      ...font,
+      canonicalPath: "C:\\Fonts\\Zulu.ttf",
+      fileName: "Zulu.ttf",
+      faces: [{ family: "Zulu Sans", style: "Regular" }],
+      loadedAt: "2026-08-01T12:00:00Z",
+    };
+    const newer = {
+      ...font,
+      canonicalPath: "C:\\Fonts\\Alpha.ttf",
+      fileName: "Alpha.ttf",
+      faces: [{ family: "Alpha Sans", style: "Regular" }],
+      loadedAt: "2026-08-03T12:00:00Z",
+    };
+    mockInitial({ ...emptySnapshot(), fonts: [older, newer] });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const names = () =>
+      wrapper
+        .findAll("[data-testid='font-row']")
+        .map(row => row.find(".font-identity strong").text());
+
+    expect(names()).toEqual(["Alpha Sans · Regular", "Zulu Sans · Regular"]);
+
+    await wrapper.get('[data-testid="font-sort"]').setValue("name-desc");
+    expect(names()).toEqual(["Zulu Sans · Regular", "Alpha Sans · Regular"]);
+
+    await wrapper.get('[data-testid="font-sort"]').setValue("loaded-at-asc");
+    expect(names()).toEqual(["Zulu Sans · Regular", "Alpha Sans · Regular"]);
+
+    await wrapper.get('[data-testid="font-sort"]').setValue("loaded-at-desc");
+    expect(names()).toEqual(["Alpha Sans · Regular", "Zulu Sans · Regular"]);
+  });
+
   it("loads all files returned by the picker", async () => {
     mockInitial(emptySnapshot());
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);
