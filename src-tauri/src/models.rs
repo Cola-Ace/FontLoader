@@ -52,6 +52,13 @@ pub struct BatchResult {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BatchCompletion {
+    pub operation: String,
+    pub result: BatchResult,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchProgress {
     pub operation: String,
     pub completed: usize,

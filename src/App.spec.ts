@@ -1,7 +1,12 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
-import type { AppSnapshot, BatchProgress, BatchResult } from "./types";
+import type {
+  AppSnapshot,
+  BatchCompletion,
+  BatchProgress,
+  BatchResult,
+} from "./types";
 
 const { invoke, listen, open } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -66,6 +71,77 @@ describe("App", () => {
     expect(invoke).toHaveBeenCalledWith("window_ready");
   });
 
+  it("makes the window ready before waiting for the initial state", async () => {
+    let resolveInitial!: (snapshot: AppSnapshot) => void;
+    const pendingInitial = new Promise<AppSnapshot>(resolve => {
+      resolveInitial = resolve;
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return pendingInitial;
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+      "window_ready",
+      "get_batch_progress",
+      "get_initial_state",
+    ]);
+
+    resolveInitial(emptySnapshot());
+    await flushPromises();
+    wrapper.unmount();
+  });
+
+  it("restores in-flight progress and completion after reopening", async () => {
+    let completionHandler!: (event: { payload: BatchCompletion }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "font-batch-progress") {
+        return () => {};
+      } else {
+        completionHandler = handler as (event: { payload: BatchCompletion }) => void;
+      }
+      return () => {};
+    });
+    const completion: BatchCompletion = {
+      operation: "load",
+      result: {
+        snapshot: { ...emptySnapshot(), fonts: [font] },
+        changed: [font.canonicalPath],
+        skipped: [],
+        errors: [],
+      },
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_batch_progress") {
+        return Promise.resolve({ operation: "load", completed: 1, total: 2 });
+      }
+      if (command === "get_initial_state") {
+        return Promise.resolve({ ...emptySnapshot(), fonts: [font] });
+      }
+      if (command === "take_pending_batch_completion") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("1/2");
+    expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
+    completionHandler({ payload: completion });
+    await flushPromises();
+    expect(wrapper.text()).toContain("加载成功 1 个");
+    expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
+    expect(wrapper.find(".operation-status").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("shows the last-session restore action", async () => {
     mockInitial({
       ...emptySnapshot(),
@@ -114,6 +190,24 @@ describe("App", () => {
     expect(names()).toEqual(["Alpha Sans · Regular", "Zulu Sans · Regular"]);
   });
 
+  it("persists and restores the selected sort mode", async () => {
+    mockInitial({ ...emptySnapshot(), fonts: [font] });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="font-sort"]').setValue("loaded-at-desc");
+    expect(localStorage.getItem("font-loader-sort")).toBe("loaded-at-desc");
+    wrapper.unmount();
+
+    const restoredWrapper = mount(App);
+    await flushPromises();
+
+    expect(
+      (restoredWrapper.get('[data-testid="font-sort"]').element as HTMLSelectElement).value,
+    ).toBe("loaded-at-desc");
+    restoredWrapper.unmount();
+  });
+
   it("loads all files returned by the picker", async () => {
     mockInitial(emptySnapshot());
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);
@@ -144,6 +238,138 @@ describe("App", () => {
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
   });
 
+  it("shows drag guidance and loads supported dropped fonts", async () => {
+    let dragEnterHandler!: () => void;
+    let dragDropHandler!: (event: { payload: { paths: string[] } }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "tauri://drag-enter") {
+        dragEnterHandler = handler as () => void;
+      }
+      if (event === "tauri://drag-drop") {
+        dragDropHandler = handler as (event: { payload: { paths: string[] } }) => void;
+      }
+      return () => {};
+    });
+    const result: BatchResult = {
+      snapshot: { ...emptySnapshot(), fonts: [font] },
+      changed: [font.canonicalPath],
+      skipped: [],
+      errors: [],
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(emptySnapshot());
+      }
+      if (command === "load_fonts") {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    dragEnterHandler();
+    await flushPromises();
+    expect(wrapper.get(".drop-overlay").text()).toContain("拖放字体文件以导入");
+
+    dragDropHandler({
+      payload: {
+        paths: ["C:\\Fonts\\A.ttf", "C:\\Fonts\\notes.txt", "C:\\Fonts\\B.OTF"],
+      },
+    });
+    await flushPromises();
+
+    expect(invoke).toHaveBeenCalledWith("load_fonts", {
+      paths: ["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.OTF"],
+    });
+    expect(wrapper.find(".drop-overlay").exists()).toBe(false);
+    expect(wrapper.get(".drop-notice").text()).toContain("已忽略 1 个不支持的文件");
+  });
+
+  it("rejects dropped fonts during a batch without replacing its status", async () => {
+    let dragEnterHandler!: () => void;
+    let dragDropHandler!: (event: { payload: { paths: string[] } }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "tauri://drag-enter") {
+        dragEnterHandler = handler as () => void;
+      }
+      if (event === "tauri://drag-drop") {
+        dragDropHandler = handler as (event: { payload: { paths: string[] } }) => void;
+      }
+      return () => {};
+    });
+    open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
+    let resolveBatch!: (result: BatchResult) => void;
+    const pendingBatch = new Promise<BatchResult>(resolve => {
+      resolveBatch = resolve;
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(emptySnapshot());
+      }
+      if (command === "load_fonts") {
+        return pendingBatch;
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get(".button-primary").trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".operation-status").text()).toContain("正在加载字体");
+
+    dragEnterHandler();
+    await flushPromises();
+    expect(wrapper.get(".drop-overlay").text()).toContain("暂时无法导入字体");
+    dragDropHandler({ payload: { paths: ["C:\\Fonts\\B.otf"] } });
+    await flushPromises();
+
+    expect(invoke.mock.calls.filter(([command]) => command === "load_fonts")).toHaveLength(1);
+    expect(wrapper.get(".operation-status").text()).toContain("正在加载字体");
+    expect(wrapper.get(".drop-notice").text()).toContain("当前正在处理字体");
+
+    resolveBatch({
+      snapshot: { ...emptySnapshot(), fonts: [font] },
+      changed: [font.canonicalPath],
+      skipped: [],
+      errors: [],
+    });
+    await flushPromises();
+    wrapper.unmount();
+  });
+
+  it("hides the last-session restore action after choosing fonts", async () => {
+    const initialSnapshot = {
+      ...emptySnapshot(),
+      restoreCandidates: ["C:\\Fonts\\Previous.ttf"],
+    };
+    mockInitial(initialSnapshot);
+    open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(initialSnapshot);
+      }
+      if (command === "load_fonts") {
+        return Promise.resolve({
+          snapshot: { ...initialSnapshot, fonts: [font] },
+          changed: [font.canonicalPath],
+          skipped: [],
+          errors: [],
+        } satisfies BatchResult);
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.find(".restore-band").exists()).toBe(true);
+    await wrapper.get(".button-primary").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".restore-band").exists()).toBe(false);
+  });
+
   it("shows progress while loading files", async () => {
     mockInitial(emptySnapshot());
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);
@@ -152,8 +378,10 @@ describe("App", () => {
       resolveBatch = resolve;
     });
     let progressHandler!: (event: { payload: BatchProgress }) => void;
-    listen.mockImplementation(async (_event, handler) => {
-      progressHandler = handler as (event: { payload: BatchProgress }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "font-batch-progress") {
+        progressHandler = handler as (event: { payload: BatchProgress }) => void;
+      }
       return () => {};
     });
     invoke.mockImplementation((command: string) => {

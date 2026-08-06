@@ -68,6 +68,10 @@ impl FontCore {
         F: FnMut(usize),
     {
         let mut data = self.data.lock().unwrap();
+        if !data.restore_candidates.is_empty() {
+            data.restore_candidates.clear();
+            let _ = self.session.write_last(&[]);
+        }
         let mut result = BatchResult::default();
         let mut completed = 0;
 
