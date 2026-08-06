@@ -2,17 +2,16 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-FontLoader is a small Windows desktop utility for loading fonts temporarily into the current Windows session.
+## Highlights
 
-It loads `.ttf`, `.otf`, and `.ttc` files through the Windows session-level font API. Fonts become available to other applications during the current session without being copied to the system font directory or installed permanently.
+- Lightweight Windows desktop utility focused on temporary font loading.
+- Minimize to the system tray and keep running in the background with very low resource usage.
+- Drag and drop `.ttf`, `.otf`, and `.ttc` files to import them.
+- Import and unload fonts in batches, or search, select, and manage them individually.
+- Load fonts for the current Windows session without copying them to the system font directory or installing them permanently.
+- Restore fonts from the previous session once, then unload managed fonts automatically before exit.
 
-## Features
-
-- Load multiple TrueType, OpenType, and TrueType Collection files at once.
-- Search, select, and unload individual fonts or batches of fonts.
-- Keep the Rust background process and system tray available after the main window is minimized.
-- Offer a one-time restore action for fonts from the previous session.
-- Unload managed fonts before the application exits.
+FontLoader loads `.ttf`, `.otf`, and `.ttc` files through the Windows session-level font API. Fonts become available to other applications during the current session without being copied to the system font directory or installed permanently.
 
 > When closing, FontLoader destroys the WebView first and unloads managed fonts in the background. The process may remain briefly after the window closes and will exit automatically when cleanup finishes. This is expected.
 
@@ -49,7 +48,7 @@ The release executable is written to Cargo's release target directory, normally 
 
 ## Usage
 
-1. Open FontLoader and choose one or more `.ttf`, `.otf`, or `.ttc` files.
+1. Open FontLoader and choose or drag in one or more `.ttf`, `.otf`, or `.ttc` files.
 2. Review the loaded fonts in the list. Duplicate files are skipped.
 3. Use search and selection controls to find fonts and unload them individually or in batches.
 4. Minimize the window to keep the app in the system tray. Open it again from the tray when needed.
