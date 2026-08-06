@@ -32,6 +32,11 @@ export interface BatchResult {
   errors: OperationError[];
 }
 
+export interface BatchCompletion {
+  operation: "load" | "unload";
+  result: BatchResult;
+}
+
 export interface BatchProgress {
   operation: "load" | "unload";
   completed: number;

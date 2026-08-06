@@ -3,7 +3,7 @@ mod models;
 mod session;
 mod state;
 
-use models::{AppSnapshot, BatchProgress, BatchResult, ExitResult};
+use models::{AppSnapshot, BatchCompletion, BatchProgress, BatchResult, ExitResult};
 use state::FontCore;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -38,6 +38,9 @@ struct WindowBounds {
 
 struct AppState {
     core: Arc<FontCore>,
+    cached_snapshot: Arc<Mutex<AppSnapshot>>,
+    batch_progress: Arc<Mutex<Option<BatchProgress>>>,
+    pending_batch_completion: Arc<Mutex<Option<BatchCompletion>>>,
     window_status: Mutex<WindowStatus>,
     window_bounds: Mutex<Option<WindowBounds>>,
     exit_requested: AtomicBool,
@@ -46,8 +49,13 @@ struct AppState {
 
 impl AppState {
     fn new(core: FontCore) -> Self {
+        let core = Arc::new(core);
+        let cached_snapshot = core.snapshot();
         Self {
-            core: Arc::new(core),
+            core,
+            cached_snapshot: Arc::new(Mutex::new(cached_snapshot)),
+            batch_progress: Arc::new(Mutex::new(None)),
+            pending_batch_completion: Arc::new(Mutex::new(None)),
             window_status: Mutex::new(WindowStatus::Creating),
             window_bounds: Mutex::new(None),
             exit_requested: AtomicBool::new(false),
@@ -57,10 +65,23 @@ impl AppState {
 }
 
 #[tauri::command]
-fn get_initial_state(app: AppHandle, state: State<'_, AppState>) -> AppSnapshot {
-    let snapshot = state.core.snapshot();
+async fn get_initial_state(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppSnapshot, String> {
+    let snapshot = state.cached_snapshot.lock().unwrap().clone();
     update_loaded_count(&app, snapshot.fonts.len());
-    snapshot
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn get_batch_progress(state: State<'_, AppState>) -> Option<BatchProgress> {
+    state.batch_progress.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn take_pending_batch_completion(state: State<'_, AppState>) -> Option<BatchCompletion> {
+    state.pending_batch_completion.lock().unwrap().take()
 }
 
 #[tauri::command]
@@ -70,16 +91,27 @@ async fn load_fonts(
     state: State<'_, AppState>,
 ) -> Result<BatchResult, String> {
     let total = paths.len();
+    let batch_progress = Arc::clone(&state.batch_progress);
+    let pending_batch_completion = Arc::clone(&state.pending_batch_completion);
+    clear_pending_batch_completion(&pending_batch_completion);
+    update_batch_progress(&batch_progress, "load", 0, total);
     emit_batch_progress(&app, "load", 0, total);
     let core = Arc::clone(&state.core);
     let progress_app = app.clone();
+    let progress_state = Arc::clone(&batch_progress);
     let result = tauri::async_runtime::spawn_blocking(move || {
         core.load_fonts_with_progress(paths, |completed| {
+            update_batch_progress(&progress_state, "load", completed, total);
             emit_batch_progress(&progress_app, "load", completed, total);
         })
     })
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string());
+    clear_batch_progress(&batch_progress);
+    let result = result?;
+    update_cached_snapshot(&state.cached_snapshot, result.snapshot.clone());
+    let completion = store_batch_completion(&pending_batch_completion, "load", &result);
+    emit_batch_completion(&app, &completion);
     update_loaded_count(&app, result.snapshot.fonts.len());
     Ok(result)
 }
@@ -91,16 +123,27 @@ async fn unload_fonts(
     state: State<'_, AppState>,
 ) -> Result<BatchResult, String> {
     let total = paths.len();
+    let batch_progress = Arc::clone(&state.batch_progress);
+    let pending_batch_completion = Arc::clone(&state.pending_batch_completion);
+    clear_pending_batch_completion(&pending_batch_completion);
+    update_batch_progress(&batch_progress, "unload", 0, total);
     emit_batch_progress(&app, "unload", 0, total);
     let core = Arc::clone(&state.core);
     let progress_app = app.clone();
+    let progress_state = Arc::clone(&batch_progress);
     let result = tauri::async_runtime::spawn_blocking(move || {
         core.unload_fonts_with_progress(paths, |completed| {
+            update_batch_progress(&progress_state, "unload", completed, total);
             emit_batch_progress(&progress_app, "unload", completed, total);
         })
     })
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string());
+    clear_batch_progress(&batch_progress);
+    let result = result?;
+    update_cached_snapshot(&state.cached_snapshot, result.snapshot.clone());
+    let completion = store_batch_completion(&pending_batch_completion, "unload", &result);
+    emit_batch_completion(&app, &completion);
     update_loaded_count(&app, result.snapshot.fonts.len());
     Ok(result)
 }
@@ -111,23 +154,36 @@ async fn restore_last_session(
     state: State<'_, AppState>,
 ) -> Result<BatchResult, String> {
     let total = state.core.snapshot().restore_candidates.len();
+    let batch_progress = Arc::clone(&state.batch_progress);
+    let pending_batch_completion = Arc::clone(&state.pending_batch_completion);
+    clear_pending_batch_completion(&pending_batch_completion);
+    update_batch_progress(&batch_progress, "load", 0, total);
     emit_batch_progress(&app, "load", 0, total);
     let core = Arc::clone(&state.core);
     let progress_app = app.clone();
+    let progress_state = Arc::clone(&batch_progress);
     let result = tauri::async_runtime::spawn_blocking(move || {
         core.restore_last_session_with_progress(|completed| {
+            update_batch_progress(&progress_state, "load", completed, total);
             emit_batch_progress(&progress_app, "load", completed, total);
         })
     })
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string());
+    clear_batch_progress(&batch_progress);
+    let result = result?;
+    update_cached_snapshot(&state.cached_snapshot, result.snapshot.clone());
+    let completion = store_batch_completion(&pending_batch_completion, "load", &result);
+    emit_batch_completion(&app, &completion);
     update_loaded_count(&app, result.snapshot.fonts.len());
     Ok(result)
 }
 
 #[tauri::command]
 fn dismiss_last_session(state: State<'_, AppState>) -> AppSnapshot {
-    state.core.dismiss_last_session()
+    let snapshot = state.core.dismiss_last_session();
+    update_cached_snapshot(&state.cached_snapshot, snapshot.clone());
+    snapshot
 }
 
 #[tauri::command]
@@ -143,11 +199,15 @@ async fn request_exit(
         });
     }
     let total = state.core.snapshot().fonts.len();
+    let batch_progress = Arc::clone(&state.batch_progress);
+    update_batch_progress(&batch_progress, "unload", 0, total);
     emit_batch_progress(&app, "unload", 0, total);
     let core = Arc::clone(&state.core);
     let progress_app = app.clone();
+    let progress_state = Arc::clone(&batch_progress);
     let result = match tauri::async_runtime::spawn_blocking(move || {
         core.prepare_exit_with_progress(force, |completed| {
+            update_batch_progress(&progress_state, "unload", completed, total);
             emit_batch_progress(&progress_app, "unload", completed, total);
         })
     })
@@ -155,10 +215,13 @@ async fn request_exit(
     {
         Ok(result) => result,
         Err(error) => {
+            clear_batch_progress(&batch_progress);
             state.exit_requested.store(false, Ordering::SeqCst);
             return Err(error.to_string());
         }
     };
+    clear_batch_progress(&batch_progress);
+    update_cached_snapshot(&state.cached_snapshot, state.core.snapshot());
     if result.exiting {
         state.exiting.store(true, Ordering::SeqCst);
         let app_handle = app.clone();
@@ -188,6 +251,7 @@ fn loaded_count_label(count: usize) -> String {
 }
 
 const BATCH_PROGRESS_EVENT: &str = "font-batch-progress";
+const BATCH_COMPLETION_EVENT: &str = "font-batch-complete";
 
 fn emit_batch_progress(app: &AppHandle, operation: &str, completed: usize, total: usize) {
     let _ = app.emit(
@@ -198,6 +262,48 @@ fn emit_batch_progress(app: &AppHandle, operation: &str, completed: usize, total
             total,
         },
     );
+}
+
+fn emit_batch_completion(app: &AppHandle, completion: &BatchCompletion) {
+    let _ = app.emit(BATCH_COMPLETION_EVENT, completion);
+}
+
+fn update_batch_progress(
+    progress_state: &Mutex<Option<BatchProgress>>,
+    operation: &str,
+    completed: usize,
+    total: usize,
+) {
+    *progress_state.lock().unwrap() = Some(BatchProgress {
+        operation: operation.to_string(),
+        completed,
+        total,
+    });
+}
+
+fn clear_batch_progress(progress_state: &Mutex<Option<BatchProgress>>) {
+    *progress_state.lock().unwrap() = None;
+}
+
+fn store_batch_completion(
+    completion_state: &Mutex<Option<BatchCompletion>>,
+    operation: &str,
+    result: &BatchResult,
+) -> BatchCompletion {
+    let completion = BatchCompletion {
+        operation: operation.to_string(),
+        result: result.clone(),
+    };
+    *completion_state.lock().unwrap() = Some(completion.clone());
+    completion
+}
+
+fn clear_pending_batch_completion(completion_state: &Mutex<Option<BatchCompletion>>) {
+    *completion_state.lock().unwrap() = None;
+}
+
+fn update_cached_snapshot(snapshot_state: &Mutex<AppSnapshot>, snapshot: AppSnapshot) {
+    *snapshot_state.lock().unwrap() = snapshot;
 }
 
 fn update_loaded_count(app: &AppHandle, count: usize) {
@@ -380,6 +486,7 @@ fn request_application_exit(app: AppHandle) {
 
         let state = app.state::<AppState>();
         let result = state.core.prepare_exit(false);
+        update_cached_snapshot(&state.cached_snapshot, state.core.snapshot());
         if result.exiting {
             state.exiting.store(true, Ordering::SeqCst);
             app.exit(0);
@@ -461,6 +568,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_initial_state,
+            get_batch_progress,
+            take_pending_batch_completion,
             load_fonts,
             unload_fonts,
             restore_last_session,

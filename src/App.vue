@@ -17,6 +17,7 @@ import {
 } from "lucide-vue-next";
 import type {
   AppSnapshot,
+  BatchCompletion,
   BatchProgress,
   BatchResult,
   ExitResult,
@@ -43,7 +44,9 @@ type SortMode = "name-asc" | "name-desc" | "loaded-at-asc" | "loaded-at-desc";
 
 const sortMode = ref<SortMode>("name-asc");
 let stopProgressListener: (() => void) | undefined;
+let stopCompletionListener: (() => void) | undefined;
 let statusDismissTimer: number | undefined;
+let batchInvocationActive = false;
 
 watch(sortMode, nextSortMode => {
   localStorage.setItem("font-loader-sort", nextSortMode);
@@ -202,20 +205,43 @@ function totalFor(
   return Array.isArray(args.paths) ? args.paths.length : 0;
 }
 
+function applyBatchProgress(nextProgress: BatchProgress) {
+  busy.value = true;
+  clearStatusTimer();
+  operationErrors.value = [];
+  operationProgress.value = nextProgress;
+  statusMessage.value =
+    nextProgress.operation === "unload" ? "正在卸载字体..." : "正在加载字体...";
+}
+
+function clearRecoveredProgress() {
+  clearStatusTimer();
+  busy.value = false;
+  operationProgress.value = null;
+  operationErrors.value = [];
+  statusMessage.value = "";
+}
+
+function applyBatchCompletion(completion: BatchCompletion) {
+  clearRecoveredProgress();
+  applySnapshot(
+    completion.operation === "load"
+      ? { ...completion.result.snapshot, restoreCandidates: [] }
+      : completion.result.snapshot,
+  );
+  summarizeResult(completion.result, completion.operation === "unload" ? "卸载" : "加载");
+}
+
 async function runBatch(
   command: "load_fonts" | "unload_fonts" | "restore_last_session",
   args: Record<string, unknown> = {},
 ) {
-  busy.value = true;
-  clearStatusTimer();
-  operationErrors.value = [];
-  operationProgress.value = {
+  batchInvocationActive = true;
+  applyBatchProgress({
     operation: operationFor(command),
     completed: 0,
     total: totalFor(command, args),
-  };
-  statusMessage.value =
-    command === "unload_fonts" ? "正在卸载字体..." : "正在加载字体...";
+  });
   try {
     const result = await invoke<BatchResult>(command, args);
     applySnapshot(
@@ -224,6 +250,7 @@ async function runBatch(
         : result.snapshot,
     );
     summarizeResult(result, command === "unload_fonts" ? "卸载" : "加载");
+    void invoke("take_pending_batch_completion").catch(() => {});
   } catch (error) {
     const action = command === "unload_fonts" ? "卸载" : "加载";
     statusMessage.value = `${action}失败`;
@@ -236,6 +263,7 @@ async function runBatch(
     ];
     scheduleStatusDismiss();
   } finally {
+    batchInvocationActive = false;
     busy.value = false;
     operationProgress.value = null;
   }
@@ -321,15 +349,38 @@ onMounted(async () => {
   try {
     stopProgressListener = await listen<BatchProgress>("font-batch-progress", event => {
       if (
-        !busy.value ||
+        busy.value &&
         operationProgress.value?.operation !== event.payload.operation
       ) {
         return;
       }
-      operationProgress.value = event.payload;
+      applyBatchProgress(event.payload);
+      if (
+        event.payload.completed >= event.payload.total &&
+        !batchInvocationActive
+      ) {
+        clearRecoveredProgress();
+      }
     });
-    applySnapshot(await invoke<AppSnapshot>("get_initial_state"));
+    stopCompletionListener = await listen<BatchCompletion>("font-batch-complete", event => {
+      if (batchInvocationActive) {
+        return;
+      }
+      applyBatchCompletion(event.payload);
+      void invoke("take_pending_batch_completion").catch(() => {});
+    });
     await invoke("window_ready");
+    const initialProgress = await invoke<BatchProgress | null>("get_batch_progress");
+    if (initialProgress) {
+      applyBatchProgress(initialProgress);
+    }
+    applySnapshot(await invoke<AppSnapshot>("get_initial_state"));
+    const pendingCompletion = await invoke<BatchCompletion | null>(
+      "take_pending_batch_completion",
+    );
+    if (pendingCompletion) {
+      applyBatchCompletion(pendingCompletion);
+    }
   } catch (error) {
     operationErrors.value = [
       {
@@ -343,6 +394,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopProgressListener?.();
+  stopCompletionListener?.();
   clearStatusTimer();
 });
 </script>

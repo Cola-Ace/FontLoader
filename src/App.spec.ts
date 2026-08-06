@@ -1,7 +1,12 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
-import type { AppSnapshot, BatchProgress, BatchResult } from "./types";
+import type {
+  AppSnapshot,
+  BatchCompletion,
+  BatchProgress,
+  BatchResult,
+} from "./types";
 
 const { invoke, listen, open } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -64,6 +69,77 @@ describe("App", () => {
 
     expect(wrapper.text()).toContain("尚未加载字体");
     expect(invoke).toHaveBeenCalledWith("window_ready");
+  });
+
+  it("makes the window ready before waiting for the initial state", async () => {
+    let resolveInitial!: (snapshot: AppSnapshot) => void;
+    const pendingInitial = new Promise<AppSnapshot>(resolve => {
+      resolveInitial = resolve;
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return pendingInitial;
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+      "window_ready",
+      "get_batch_progress",
+      "get_initial_state",
+    ]);
+
+    resolveInitial(emptySnapshot());
+    await flushPromises();
+    wrapper.unmount();
+  });
+
+  it("restores in-flight progress and completion after reopening", async () => {
+    let completionHandler!: (event: { payload: BatchCompletion }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "font-batch-progress") {
+        return () => {};
+      } else {
+        completionHandler = handler as (event: { payload: BatchCompletion }) => void;
+      }
+      return () => {};
+    });
+    const completion: BatchCompletion = {
+      operation: "load",
+      result: {
+        snapshot: { ...emptySnapshot(), fonts: [font] },
+        changed: [font.canonicalPath],
+        skipped: [],
+        errors: [],
+      },
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_batch_progress") {
+        return Promise.resolve({ operation: "load", completed: 1, total: 2 });
+      }
+      if (command === "get_initial_state") {
+        return Promise.resolve({ ...emptySnapshot(), fonts: [font] });
+      }
+      if (command === "take_pending_batch_completion") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("1/2");
+    expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
+    completionHandler({ payload: completion });
+    await flushPromises();
+    expect(wrapper.text()).toContain("加载成功 1 个");
+    expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
+    expect(wrapper.find(".operation-status").exists()).toBe(true);
+    wrapper.unmount();
   });
 
   it("shows the last-session restore action", async () => {
@@ -201,8 +277,10 @@ describe("App", () => {
       resolveBatch = resolve;
     });
     let progressHandler!: (event: { payload: BatchProgress }) => void;
-    listen.mockImplementation(async (_event, handler) => {
-      progressHandler = handler as (event: { payload: BatchProgress }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "font-batch-progress") {
+        progressHandler = handler as (event: { payload: BatchProgress }) => void;
+      }
       return () => {};
     });
     invoke.mockImplementation((command: string) => {
