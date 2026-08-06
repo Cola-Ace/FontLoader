@@ -114,6 +114,24 @@ describe("App", () => {
     expect(names()).toEqual(["Alpha Sans · Regular", "Zulu Sans · Regular"]);
   });
 
+  it("persists and restores the selected sort mode", async () => {
+    mockInitial({ ...emptySnapshot(), fonts: [font] });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="font-sort"]').setValue("loaded-at-desc");
+    expect(localStorage.getItem("font-loader-sort")).toBe("loaded-at-desc");
+    wrapper.unmount();
+
+    const restoredWrapper = mount(App);
+    await flushPromises();
+
+    expect(
+      (restoredWrapper.get('[data-testid="font-sort"]').element as HTMLSelectElement).value,
+    ).toBe("loaded-at-desc");
+    restoredWrapper.unmount();
+  });
+
   it("loads all files returned by the picker", async () => {
     mockInitial(emptySnapshot());
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);

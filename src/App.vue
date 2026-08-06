@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -44,6 +44,10 @@ type SortMode = "name-asc" | "name-desc" | "loaded-at-asc" | "loaded-at-desc";
 const sortMode = ref<SortMode>("name-asc");
 let stopProgressListener: (() => void) | undefined;
 let statusDismissTimer: number | undefined;
+
+watch(sortMode, nextSortMode => {
+  localStorage.setItem("font-loader-sort", nextSortMode);
+});
 
 const faceLabel = (font: FontEntry) =>
   font.faces.map(face => `${face.family} · ${face.style}`).join("；");
@@ -302,6 +306,15 @@ onMounted(async () => {
         ? "dark"
         : "light",
   );
+  const savedSortMode = localStorage.getItem("font-loader-sort");
+  if (
+    savedSortMode === "name-asc" ||
+    savedSortMode === "name-desc" ||
+    savedSortMode === "loaded-at-asc" ||
+    savedSortMode === "loaded-at-desc"
+  ) {
+    sortMode.value = savedSortMode;
+  }
   if (!("__TAURI_INTERNALS__" in window) && import.meta.env.MODE !== "test") {
     return;
   }
