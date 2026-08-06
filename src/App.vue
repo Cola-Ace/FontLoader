@@ -214,7 +214,11 @@ async function runBatch(
     command === "unload_fonts" ? "正在卸载字体..." : "正在加载字体...";
   try {
     const result = await invoke<BatchResult>(command, args);
-    applySnapshot(result.snapshot);
+    applySnapshot(
+      command === "load_fonts"
+        ? { ...result.snapshot, restoreCandidates: [] }
+        : result.snapshot,
+    );
     summarizeResult(result, command === "unload_fonts" ? "卸载" : "加载");
   } catch (error) {
     const action = command === "unload_fonts" ? "卸载" : "加载";
@@ -248,6 +252,9 @@ async function chooseFonts() {
     return;
   }
   const paths = Array.isArray(chosen) ? chosen : [chosen];
+  if (snapshot.value.restoreCandidates.length) {
+    applySnapshot({ ...snapshot.value, restoreCandidates: [] });
+  }
   await runBatch("load_fonts", { paths });
 }
 

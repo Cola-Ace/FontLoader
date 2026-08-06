@@ -144,6 +144,37 @@ describe("App", () => {
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
   });
 
+  it("hides the last-session restore action after choosing fonts", async () => {
+    const initialSnapshot = {
+      ...emptySnapshot(),
+      restoreCandidates: ["C:\\Fonts\\Previous.ttf"],
+    };
+    mockInitial(initialSnapshot);
+    open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(initialSnapshot);
+      }
+      if (command === "load_fonts") {
+        return Promise.resolve({
+          snapshot: { ...initialSnapshot, fonts: [font] },
+          changed: [font.canonicalPath],
+          skipped: [],
+          errors: [],
+        } satisfies BatchResult);
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.find(".restore-band").exists()).toBe(true);
+    await wrapper.get(".button-primary").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".restore-band").exists()).toBe(false);
+  });
+
   it("shows progress while loading files", async () => {
     mockInitial(emptySnapshot());
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);
