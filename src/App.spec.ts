@@ -238,6 +238,107 @@ describe("App", () => {
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
   });
 
+  it("shows drag guidance and loads supported dropped fonts", async () => {
+    let dragEnterHandler!: () => void;
+    let dragDropHandler!: (event: { payload: { paths: string[] } }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "tauri://drag-enter") {
+        dragEnterHandler = handler as () => void;
+      }
+      if (event === "tauri://drag-drop") {
+        dragDropHandler = handler as (event: { payload: { paths: string[] } }) => void;
+      }
+      return () => {};
+    });
+    const result: BatchResult = {
+      snapshot: { ...emptySnapshot(), fonts: [font] },
+      changed: [font.canonicalPath],
+      skipped: [],
+      errors: [],
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(emptySnapshot());
+      }
+      if (command === "load_fonts") {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    dragEnterHandler();
+    await flushPromises();
+    expect(wrapper.get(".drop-overlay").text()).toContain("拖放字体文件以导入");
+
+    dragDropHandler({
+      payload: {
+        paths: ["C:\\Fonts\\A.ttf", "C:\\Fonts\\notes.txt", "C:\\Fonts\\B.OTF"],
+      },
+    });
+    await flushPromises();
+
+    expect(invoke).toHaveBeenCalledWith("load_fonts", {
+      paths: ["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.OTF"],
+    });
+    expect(wrapper.find(".drop-overlay").exists()).toBe(false);
+    expect(wrapper.get(".drop-notice").text()).toContain("已忽略 1 个不支持的文件");
+  });
+
+  it("rejects dropped fonts during a batch without replacing its status", async () => {
+    let dragEnterHandler!: () => void;
+    let dragDropHandler!: (event: { payload: { paths: string[] } }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "tauri://drag-enter") {
+        dragEnterHandler = handler as () => void;
+      }
+      if (event === "tauri://drag-drop") {
+        dragDropHandler = handler as (event: { payload: { paths: string[] } }) => void;
+      }
+      return () => {};
+    });
+    open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
+    let resolveBatch!: (result: BatchResult) => void;
+    const pendingBatch = new Promise<BatchResult>(resolve => {
+      resolveBatch = resolve;
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(emptySnapshot());
+      }
+      if (command === "load_fonts") {
+        return pendingBatch;
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get(".button-primary").trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".operation-status").text()).toContain("正在加载字体");
+
+    dragEnterHandler();
+    await flushPromises();
+    expect(wrapper.get(".drop-overlay").text()).toContain("暂时无法导入字体");
+    dragDropHandler({ payload: { paths: ["C:\\Fonts\\B.otf"] } });
+    await flushPromises();
+
+    expect(invoke.mock.calls.filter(([command]) => command === "load_fonts")).toHaveLength(1);
+    expect(wrapper.get(".operation-status").text()).toContain("正在加载字体");
+    expect(wrapper.get(".drop-notice").text()).toContain("当前正在处理字体");
+
+    resolveBatch({
+      snapshot: { ...emptySnapshot(), fonts: [font] },
+      changed: [font.canonicalPath],
+      skipped: [],
+      errors: [],
+    });
+    await flushPromises();
+    wrapper.unmount();
+  });
+
   it("hides the last-session restore action after choosing fonts", async () => {
     const initialSnapshot = {
       ...emptySnapshot(),

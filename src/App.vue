@@ -42,10 +42,21 @@ const exitErrors = ref<OperationError[]>([]);
 const theme = ref<"light" | "dark">("light");
 type SortMode = "name-asc" | "name-desc" | "loaded-at-asc" | "loaded-at-desc";
 
+type DragDropPayload = {
+  paths?: string[];
+};
+
 const sortMode = ref<SortMode>("name-asc");
+const dragActive = ref(false);
+const dropNotice = ref("");
 let stopProgressListener: (() => void) | undefined;
 let stopCompletionListener: (() => void) | undefined;
+let stopDragEnterListener: (() => void) | undefined;
+let stopDragOverListener: (() => void) | undefined;
+let stopDragLeaveListener: (() => void) | undefined;
+let stopDragDropListener: (() => void) | undefined;
 let statusDismissTimer: number | undefined;
+let dropNoticeTimer: number | undefined;
 let batchInvocationActive = false;
 
 watch(sortMode, nextSortMode => {
@@ -181,6 +192,22 @@ function dismissStatus() {
   operationErrors.value = [];
 }
 
+function clearDropNoticeTimer() {
+  if (dropNoticeTimer !== undefined) {
+    window.clearTimeout(dropNoticeTimer);
+    dropNoticeTimer = undefined;
+  }
+}
+
+function showDropNotice(message: string) {
+  clearDropNoticeTimer();
+  dropNotice.value = message;
+  dropNoticeTimer = window.setTimeout(() => {
+    dropNotice.value = "";
+    dropNoticeTimer = undefined;
+  }, 4500);
+}
+
 function applyTheme(nextTheme: "light" | "dark") {
   theme.value = nextTheme;
   document.documentElement.dataset.theme = nextTheme;
@@ -284,10 +311,52 @@ async function chooseFonts() {
     return;
   }
   const paths = Array.isArray(chosen) ? chosen : [chosen];
+  await importFontPaths(paths);
+}
+
+function isSupportedFontPath(path: string) {
+  return /\.(ttf|otf|ttc)$/i.test(path);
+}
+
+async function importFontPaths(paths: string[]) {
   if (snapshot.value.restoreCandidates.length) {
     applySnapshot({ ...snapshot.value, restoreCandidates: [] });
   }
   await runBatch("load_fonts", { paths });
+}
+
+function handleDragEnter() {
+  dragActive.value = true;
+}
+
+function handleDragOver() {
+  dragActive.value = true;
+}
+
+function handleDragLeave() {
+  dragActive.value = false;
+}
+
+async function handleDragDrop(payload: DragDropPayload) {
+  dragActive.value = false;
+  if (busy.value) {
+    showDropNotice("当前正在处理字体，暂时无法导入，请稍后再试");
+    return;
+  }
+
+  const paths = Array.isArray(payload.paths) ? payload.paths : [];
+  const supportedPaths = paths.filter(isSupportedFontPath);
+  const ignoredCount = paths.length - supportedPaths.length;
+  if (!supportedPaths.length) {
+    showDropNotice(
+      paths.length ? "仅支持拖入 TTF、OTF 或 TTC 字体文件" : "未检测到可导入的字体文件",
+    );
+    return;
+  }
+  if (ignoredCount) {
+    showDropNotice(`已忽略 ${ignoredCount} 个不支持的文件`);
+  }
+  await importFontPaths(supportedPaths);
 }
 
 async function unloadSelected() {
@@ -362,6 +431,12 @@ onMounted(async () => {
         clearRecoveredProgress();
       }
     });
+    stopDragEnterListener = await listen("tauri://drag-enter", handleDragEnter);
+    stopDragOverListener = await listen("tauri://drag-over", handleDragOver);
+    stopDragLeaveListener = await listen("tauri://drag-leave", handleDragLeave);
+    stopDragDropListener = await listen<DragDropPayload>("tauri://drag-drop", event => {
+      void handleDragDrop(event.payload);
+    });
     stopCompletionListener = await listen<BatchCompletion>("font-batch-complete", event => {
       if (batchInvocationActive) {
         return;
@@ -395,12 +470,37 @@ onMounted(async () => {
 onUnmounted(() => {
   stopProgressListener?.();
   stopCompletionListener?.();
+  stopDragEnterListener?.();
+  stopDragOverListener?.();
+  stopDragLeaveListener?.();
+  stopDragDropListener?.();
   clearStatusTimer();
+  clearDropNoticeTimer();
 });
 </script>
 
 <template>
   <div class="app-shell">
+    <div v-if="dragActive" class="drop-overlay" :class="{ 'is-blocked': busy }">
+      <section class="drop-guide" role="status" aria-live="polite">
+        <AlertTriangle v-if="busy" :size="30" />
+        <FilePlus2 v-else :size="30" />
+        <strong>{{ busy ? "暂时无法导入字体" : "拖放字体文件以导入" }}</strong>
+        <span>
+          {{
+            busy
+              ? "正在加载或卸载字体，请完成当前操作后再试"
+              : "松开鼠标即可加载 TTF、OTF 或 TTC 文件"
+          }}
+        </span>
+      </section>
+    </div>
+
+    <section v-if="dropNotice" class="drop-notice" role="status" aria-live="polite">
+      <AlertTriangle :size="17" />
+      <span>{{ dropNotice }}</span>
+    </section>
+
     <header class="app-header">
       <div class="brand-block">
         <h1>FontLoader</h1>
