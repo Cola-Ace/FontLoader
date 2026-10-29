@@ -5,8 +5,7 @@ import type { FontEntry } from "./types";
 
 const props = defineProps<{ font: FontEntry; searchTerm: string }>();
 const expanded = ref(false);
-const allFamiliesKey = Symbol("all-families");
-const copiedKey = ref<string | symbol | null>(null);
+const copiedKey = ref<string | null>(null);
 const copyMessage = ref("");
 const copyFailed = ref(false);
 const copying = ref(false);
@@ -24,21 +23,19 @@ const families = computed(() => {
 });
 const showAll = computed(() => expanded.value || !!props.searchTerm.trim());
 const visibleFamilies = computed(() =>
-  showAll.value ? families.value : families.value.slice(0, 3),
+  showAll.value ? families.value : families.value.slice(0, 2),
 );
 
-async function copyFamilies(names: string[], key: string | symbol) {
+async function copyFamily(name: string) {
   window.clearTimeout(copyTimer);
   copying.value = true;
   copiedKey.value = null;
   copyMessage.value = "";
   copyFailed.value = false;
   try {
-    await navigator.clipboard.writeText(names.join("\n"));
-    copiedKey.value = key;
-    copyMessage.value = names.length === 1
-      ? `已复制：${names[0]}`
-      : `已复制 ${names.length} 个 family name`;
+    await navigator.clipboard.writeText(name);
+    copiedKey.value = name;
+    copyMessage.value = `已复制：${name}`;
     copyTimer = window.setTimeout(() => {
       copiedKey.value = null;
       copyMessage.value = "";
@@ -62,23 +59,12 @@ onUnmounted(() => window.clearTimeout(copyTimer));
       <span v-if="font.format === 'TTC'" class="collection-count">
         {{ families.length }} 个字体族 · {{ font.faces.length }} 个字体面
       </span>
-      <button
-        v-if="families.length > 1"
-        class="text-button copy-all"
-        type="button"
-        :disabled="copying"
-        :aria-label="`复制 ${font.fileName} 的全部 family name`"
-        @click="copyFamilies(families.map(family => family.name), allFamiliesKey)"
-      >
-        <Check v-if="copiedKey === allFamiliesKey" :size="14" />
-        <Copy v-else :size="14" />
-        {{ copiedKey === allFamiliesKey ? "已复制" : "复制全部" }}
-      </button>
     </div>
     <ul class="family-list">
       <li v-for="family in visibleFamilies" :key="family.name" class="family-row">
         <div class="family-name-line">
           <strong class="family-name">{{ family.name }}</strong>
+          <span class="family-styles">{{ family.styles.join(" · ") }}</span>
           <button
             class="icon-button copy-family"
             :class="{ 'is-copied': copiedKey === family.name }"
@@ -86,17 +72,16 @@ onUnmounted(() => window.clearTimeout(copyTimer));
             :disabled="copying"
             :aria-label="`复制 family name：${family.name}`"
             :title="copiedKey === family.name ? '已复制' : '复制 family name'"
-            @click="copyFamilies([family.name], family.name)"
+            @click="copyFamily(family.name)"
           >
             <Check v-if="copiedKey === family.name" :size="15" />
             <Copy v-else :size="15" />
           </button>
         </div>
-        <span class="family-styles">{{ family.styles.join(" · ") }}</span>
       </li>
     </ul>
     <button
-      v-if="families.length > 3 && !searchTerm.trim()"
+      v-if="families.length > 2 && !searchTerm.trim()"
       class="text-button collection-toggle"
       type="button"
       :aria-expanded="expanded"
@@ -104,7 +89,7 @@ onUnmounted(() => window.clearTimeout(copyTimer));
     >
       <ChevronUp v-if="expanded" :size="14" />
       <ChevronDown v-else :size="14" />
-      {{ expanded ? "收起" : `展开其余 ${families.length - 3} 个字体族` }}
+      {{ expanded ? "收起" : `展开其余 ${families.length - 2} 个字体族` }}
     </button>
     <span class="copy-feedback" :class="{ 'visually-hidden': !copyFailed }" role="status">
       {{ copyMessage }}

@@ -38,6 +38,7 @@ const searchTerm = ref("");
 const busy = ref(false);
 const operationErrors = ref<OperationError[]>([]);
 const statusMessage = ref("");
+const statusWarning = ref(false);
 const operationProgress = ref<BatchProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
 const theme = ref<"light" | "dark">("light");
@@ -159,6 +160,7 @@ function toggleAllVisible(selected: boolean) {
 }
 
 function summarizeResult(result: BatchResult, action: "加载" | "卸载") {
+  statusWarning.value = false;
   const messages = [`${action}成功 ${result.changed.length} 个`];
   if (result.skipped.length) {
     messages.push(`跳过 ${result.skipped.length} 个`);
@@ -234,6 +236,7 @@ function totalFor(
 }
 
 function applyBatchProgress(nextProgress: BatchProgress) {
+  statusWarning.value = false;
   busy.value = true;
   clearStatusTimer();
   operationErrors.value = [];
@@ -372,11 +375,14 @@ async function unloadOne(path: string) {
 }
 
 async function restoreSession() {
+  if (!snapshot.value.restoreCandidates.length) {
+    operationErrors.value = [];
+    statusWarning.value = true;
+    statusMessage.value = "暂无上次加载记录，请先选择字体";
+    scheduleStatusDismiss();
+    return;
+  }
   await runBatch("restore_last_session");
-}
-
-async function dismissSession() {
-  applySnapshot(await invoke<AppSnapshot>("dismiss_last_session"));
 }
 
 async function retryExit(force: boolean) {
@@ -535,28 +541,30 @@ onUnmounted(() => {
           </button>
         </label>
 
+        <button
+          class="button button-secondary"
+          type="button"
+          :disabled="busy"
+          data-testid="load-last-fonts"
+          :aria-label="`加载上次字体，${snapshot.restoreCandidates.length} 个字体可恢复`"
+          :title="snapshot.restoreCandidates.length ? `恢复上次会话的 ${snapshot.restoreCandidates.length} 个字体` : '暂无上次加载记录'"
+          @click="restoreSession"
+        >
+          <RotateCcw :size="17" aria-hidden="true" />
+          <span>加载上次字体</span>
+          <span
+            class="history-count"
+            :class="{ 'is-empty': !snapshot.restoreCandidates.length }"
+            aria-hidden="true"
+          >{{ snapshot.restoreCandidates.length }}</span>
+        </button>
+
         <button class="button button-primary" type="button" :disabled="busy" @click="chooseFonts">
           <FilePlus2 :size="17" />
           选择字体
         </button>
       </div>
     </header>
-
-    <section v-if="snapshot.restoreCandidates.length" class="restore-band">
-      <div>
-        <strong>检测到上次会话</strong>
-        <span>{{ snapshot.restoreCandidates.length }} 个字体可恢复</span>
-      </div>
-      <div class="band-actions">
-        <button class="button button-secondary" type="button" :disabled="busy" @click="dismissSession">
-          忽略
-        </button>
-        <button class="button button-primary" type="button" :disabled="busy" @click="restoreSession">
-          <RotateCcw :size="16" />
-          恢复
-        </button>
-      </div>
-    </section>
 
     <main class="content">
       <div class="list-toolbar">
@@ -633,9 +641,15 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <section v-if="statusMessage || operationErrors.length" class="operation-status" aria-live="polite">
+      <section
+        v-if="statusMessage || operationErrors.length"
+        class="operation-status"
+        :class="{ 'is-warning': statusWarning }"
+        aria-live="polite"
+      >
         <div v-if="statusMessage" class="status-summary">
           <LoaderCircle v-if="busy" class="status-spinner" :size="16" />
+          <AlertTriangle v-else-if="statusWarning" :size="16" />
           <CheckCircle2 v-else :size="16" />
            <span>
              {{ statusMessage }}

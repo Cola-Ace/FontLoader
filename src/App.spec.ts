@@ -1,5 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AlertTriangle, CheckCircle2 } from "lucide-vue-next";
 import App from "./App.vue";
 import type {
   AppSnapshot,
@@ -142,7 +143,7 @@ describe("App", () => {
     wrapper.unmount();
   });
 
-  it("shows the last-session restore action", async () => {
+  it("shows the header restore button without the old session banner", async () => {
     mockInitial({
       ...emptySnapshot(),
       restoreCandidates: ["C:\\Fonts\\Example.ttf", "C:\\Fonts\\Other.otf"],
@@ -150,8 +151,125 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("2 个字体可恢复");
-    expect(wrapper.text()).toContain("恢复");
+    expect(wrapper.find(".restore-band").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("检测到上次会话");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').text()).toContain("加载上次字体");
+    expect(wrapper.get(".history-count").text()).toBe("2");
+    expect(wrapper.get(".history-count").classes()).not.toContain("is-empty");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("aria-label")).toBe(
+      "加载上次字体，2 个字体可恢复",
+    );
+  });
+
+  it("warns when loading previous fonts without history", async () => {
+    vi.useFakeTimers();
+    try {
+      mockInitial(emptySnapshot());
+      const wrapper = mount(App);
+      await flushPromises();
+
+      const button = wrapper.get('[data-testid="load-last-fonts"]');
+      expect(button.attributes("disabled")).toBeUndefined();
+      expect(button.get(".history-count").text()).toBe("0");
+      expect(button.get(".history-count").classes()).toContain("is-empty");
+      await button.trigger("click");
+
+      expect(wrapper.get(".operation-status").text()).toContain(
+        "暂无上次加载记录，请先选择字体",
+      );
+      expect(wrapper.get(".operation-status").classes()).toContain("is-warning");
+      expect(wrapper.get(".status-summary").findComponent(AlertTriangle).exists()).toBe(true);
+      expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(false);
+      expect(invoke).not.toHaveBeenCalledWith("restore_last_session", {});
+      expect(open).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(3000);
+      await flushPromises();
+      expect(wrapper.find(".operation-status").exists()).toBe(false);
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("loads all previous-session fonts from the header with progress", async () => {
+    const other = {
+      ...font,
+      canonicalPath: "C:\\Fonts\\Other.otf",
+      fileName: "Other.otf",
+      format: "OTF" as const,
+    };
+    const paths = [font.canonicalPath, other.canonicalPath];
+    let resolveBatch!: (result: BatchResult) => void;
+    const pendingBatch = new Promise<BatchResult>(resolve => {
+      resolveBatch = resolve;
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve({ ...emptySnapshot(), restoreCandidates: paths });
+      }
+      if (command === "restore_last_session") {
+        return pendingBatch;
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="load-last-fonts"]').trigger("click");
+    await flushPromises();
+
+    expect(invoke).toHaveBeenCalledWith("restore_last_session", {});
+    expect(wrapper.get(".operation-status").text()).toContain("0/2");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("disabled")).toBeDefined();
+    expect(open).not.toHaveBeenCalled();
+
+    resolveBatch({
+      snapshot: { ...emptySnapshot(), fonts: [font, other] },
+      changed: paths,
+      skipped: [],
+      errors: [],
+    });
+    await flushPromises();
+
+    expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(2);
+    expect(wrapper.get(".operation-status").text()).toContain("加载成功 2 个");
+    expect(wrapper.find(".restore-band").exists()).toBe(false);
+    expect(wrapper.get(".history-count").text()).toBe("0");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("shows partial failures when loading previous-session fonts", async () => {
+    const missingPath = "C:\\Fonts\\Missing.ttf";
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve({
+          ...emptySnapshot(),
+          restoreCandidates: [font.canonicalPath, missingPath],
+        });
+      }
+      if (command === "restore_last_session") {
+        return Promise.resolve({
+          snapshot: { ...emptySnapshot(), fonts: [font] },
+          changed: [font.canonicalPath],
+          skipped: [],
+          errors: [{ path: missingPath, code: "file_missing", message: "文件不存在" }],
+        } satisfies BatchResult);
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="load-last-fonts"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".operation-status").text()).toContain("加载成功 1 个，失败 1 个");
+    expect(wrapper.get(".error-list").text()).toContain(missingPath);
+    expect(wrapper.get(".error-list").text()).toContain("文件不存在");
+    expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
+    wrapper.unmount();
   });
 
   it("sorts fonts by name and loaded time in both directions", async () => {
@@ -373,7 +491,7 @@ describe("App", () => {
     wrapper.unmount();
   });
 
-  it("hides the last-session restore action after choosing fonts", async () => {
+  it("clears the history count but keeps the restore button after choosing fonts", async () => {
     const initialSnapshot = {
       ...emptySnapshot(),
       restoreCandidates: ["C:\\Fonts\\Previous.ttf"],
@@ -397,11 +515,12 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.find(".restore-band").exists()).toBe(true);
+    expect(wrapper.get(".history-count").text()).toBe("1");
     await wrapper.get(".button-primary").trigger("click");
     await flushPromises();
 
-    expect(wrapper.find(".restore-band").exists()).toBe(false);
+    expect(wrapper.get(".history-count").text()).toBe("0");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("disabled")).toBeUndefined();
   });
 
   it("shows progress while loading files", async () => {
@@ -430,9 +549,12 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
+    await wrapper.get('[data-testid="load-last-fonts"]').trigger("click");
+    expect(wrapper.get(".operation-status").classes()).toContain("is-warning");
     await wrapper.get(".button-primary").trigger("click");
     await flushPromises();
 
+    expect(wrapper.get(".operation-status").classes()).not.toContain("is-warning");
     expect(wrapper.text()).toContain("0/2");
     progressHandler({ payload: { operation: "load", completed: 1, total: 2 } });
     await flushPromises();
@@ -446,6 +568,7 @@ describe("App", () => {
     });
     await flushPromises();
     expect(wrapper.text()).toContain("加载成功 1 个");
+    expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(true);
   });
 
   it("dismisses a failed operation notice automatically", async () => {
