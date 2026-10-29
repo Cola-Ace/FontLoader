@@ -52,7 +52,7 @@ The release executable is written to Cargo's release target directory, normally 
 2. Review the loaded fonts in the list. Duplicate files are skipped. Copy any family name with the button beside its style label; the style is not copied. TTC collections group faces by family; expand the list to view the remaining families.
 3. Use search and selection controls to find fonts and unload them individually or in batches.
 4. Minimize the window to keep the app in the system tray. Open it again from the tray when needed.
-5. Click “加载上次字体” (Load previous fonts) to restore all fonts from the previous session. If no history is available, a notice prompts you to choose fonts first. When a previous session is detected, you can also restore or dismiss it from the banner.
+5. Click “加载上次字体” (Load previous fonts) in the header to restore all fonts from the previous session. The badge shows how many fonts can be restored. If no history is available, a notice prompts you to choose fonts first.
 
 Font registration is temporary: FontLoader does not copy font files, modify the registry, or provide permanent font installation. A restart of Windows removes the session-level registrations.
 
