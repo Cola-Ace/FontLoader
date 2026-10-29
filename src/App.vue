@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import FontFamilies from "./FontFamilies.vue";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -596,9 +597,7 @@ onUnmounted(() => {
       <div class="font-table" :class="{ 'is-empty': filteredFonts.length === 0 }">
         <div class="table-head" aria-hidden="true">
           <span></span>
-          <span>字体</span>
-          <span>格式</span>
-          <span>文件</span>
+          <span>字体文件 / Family name</span>
           <span>加载时间</span>
           <span></span>
         </div>
@@ -619,12 +618,7 @@ onUnmounted(() => {
             :aria-label="`选择 ${font.fileName}`"
             @change="setSelection(font.canonicalPath, ($event.target as HTMLInputElement).checked)"
           />
-          <div class="font-identity">
-            <strong :title="faceLabel(font)">{{ faceLabel(font) }}</strong>
-            <span :title="font.canonicalPath">{{ font.canonicalPath }}</span>
-          </div>
-          <span class="format-badge">{{ font.format }}</span>
-          <span class="file-name" :title="font.fileName">{{ font.fileName }}</span>
+          <FontFamilies :font="font" :search-term="searchTerm" />
           <time :datetime="font.loadedAt">{{ loadedTime(font.loadedAt) }}</time>
           <button
             class="icon-button row-action"

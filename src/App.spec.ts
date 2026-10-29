@@ -178,16 +178,16 @@ describe("App", () => {
         .findAll("[data-testid='font-row']")
         .map(row => row.find(".font-identity strong").text());
 
-    expect(names()).toEqual(["Alpha Sans · Regular", "Zulu Sans · Regular"]);
+    expect(names()).toEqual(["Alpha Sans", "Zulu Sans"]);
 
     await wrapper.get('[data-testid="font-sort"]').setValue("name-desc");
-    expect(names()).toEqual(["Zulu Sans · Regular", "Alpha Sans · Regular"]);
+    expect(names()).toEqual(["Zulu Sans", "Alpha Sans"]);
 
     await wrapper.get('[data-testid="font-sort"]').setValue("loaded-at-asc");
-    expect(names()).toEqual(["Zulu Sans · Regular", "Alpha Sans · Regular"]);
+    expect(names()).toEqual(["Zulu Sans", "Alpha Sans"]);
 
     await wrapper.get('[data-testid="font-sort"]').setValue("loaded-at-desc");
-    expect(names()).toEqual(["Alpha Sans · Regular", "Zulu Sans · Regular"]);
+    expect(names()).toEqual(["Alpha Sans", "Zulu Sans"]);
   });
 
   it("persists and restores the selected sort mode", async () => {
@@ -206,6 +206,40 @@ describe("App", () => {
       (restoredWrapper.get('[data-testid="font-sort"]').element as HTMLSelectElement).value,
     ).toBe("loaded-at-desc");
     restoredWrapper.unmount();
+  });
+
+  it("reveals a matching TTC family and still unloads the entire file", async () => {
+    const collection = {
+      ...font,
+      canonicalPath: "C:\\Fonts\\Collection.ttc",
+      fileName: "Collection.ttc",
+      format: "TTC" as const,
+      faces: ["Alpha", "Beta", "Gamma", "Hidden Family"].map(family => ({
+        family,
+        style: "Regular",
+      })),
+    };
+    mockInitial({ ...emptySnapshot(), fonts: [font, collection] });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('input[type="search"]').setValue("Hidden Family");
+    expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
+    expect(wrapper.findAll(".family-name").map(row => row.text())).toContain("Hidden Family");
+    invoke.mockResolvedValue({
+      snapshot: { ...emptySnapshot(), fonts: [font] },
+      changed: [collection.canonicalPath],
+      skipped: [],
+      errors: [],
+    });
+    await wrapper.get('button[aria-label="卸载 Collection.ttc"]').trigger("click");
+    await flushPromises();
+
+    expect(invoke).toHaveBeenCalledWith("unload_fonts", {
+      paths: [collection.canonicalPath],
+    });
+    expect(wrapper.text()).toContain("没有匹配的字体");
+    wrapper.unmount();
   });
 
   it("loads all files returned by the picker", async () => {
