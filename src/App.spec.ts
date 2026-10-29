@@ -1,5 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AlertTriangle, CheckCircle2 } from "lucide-vue-next";
 import App from "./App.vue";
 import type {
   AppSnapshot,
@@ -160,7 +161,7 @@ describe("App", () => {
     );
   });
 
-  it("prompts when loading previous fonts without history", async () => {
+  it("warns when loading previous fonts without history", async () => {
     vi.useFakeTimers();
     try {
       mockInitial(emptySnapshot());
@@ -176,6 +177,9 @@ describe("App", () => {
       expect(wrapper.get(".operation-status").text()).toContain(
         "暂无上次加载记录，请先选择字体",
       );
+      expect(wrapper.get(".operation-status").classes()).toContain("is-warning");
+      expect(wrapper.get(".status-summary").findComponent(AlertTriangle).exists()).toBe(true);
+      expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(false);
       expect(invoke).not.toHaveBeenCalledWith("restore_last_session", {});
       expect(open).not.toHaveBeenCalled();
 
@@ -545,9 +549,12 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
+    await wrapper.get('[data-testid="load-last-fonts"]').trigger("click");
+    expect(wrapper.get(".operation-status").classes()).toContain("is-warning");
     await wrapper.get(".button-primary").trigger("click");
     await flushPromises();
 
+    expect(wrapper.get(".operation-status").classes()).not.toContain("is-warning");
     expect(wrapper.text()).toContain("0/2");
     progressHandler({ payload: { operation: "load", completed: 1, total: 2 } });
     await flushPromises();
@@ -561,6 +568,7 @@ describe("App", () => {
     });
     await flushPromises();
     expect(wrapper.text()).toContain("加载成功 1 个");
+    expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(true);
   });
 
   it("dismisses a failed operation notice automatically", async () => {

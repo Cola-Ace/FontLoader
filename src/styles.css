@@ -14,6 +14,7 @@
   --primary-hover: #12598f;
   --danger: #b4232d;
   --success: #28764f;
+  --warning: #855d00;
   --warning-bg: #fff7df;
   --warning-border: #e8c86b;
   --focus: #4b92d0;
@@ -579,6 +580,15 @@ time {
   flex: 1;
 }
 
+.operation-status.is-warning {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.operation-status.is-warning .status-summary {
+  color: var(--warning);
+}
+
 .status-progress {
   margin-left: 6px;
   color: var(--text-muted);
@@ -713,6 +723,7 @@ time {
   --primary-hover: #61abe2;
   --danger: #ff8d98;
   --success: #70c89d;
+  --warning: #f0cc6b;
   --warning-bg: #3a321d;
   --warning-border: #76652d;
   --focus: #78b8e8;

@@ -38,6 +38,7 @@ const searchTerm = ref("");
 const busy = ref(false);
 const operationErrors = ref<OperationError[]>([]);
 const statusMessage = ref("");
+const statusWarning = ref(false);
 const operationProgress = ref<BatchProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
 const theme = ref<"light" | "dark">("light");
@@ -159,6 +160,7 @@ function toggleAllVisible(selected: boolean) {
 }
 
 function summarizeResult(result: BatchResult, action: "加载" | "卸载") {
+  statusWarning.value = false;
   const messages = [`${action}成功 ${result.changed.length} 个`];
   if (result.skipped.length) {
     messages.push(`跳过 ${result.skipped.length} 个`);
@@ -234,6 +236,7 @@ function totalFor(
 }
 
 function applyBatchProgress(nextProgress: BatchProgress) {
+  statusWarning.value = false;
   busy.value = true;
   clearStatusTimer();
   operationErrors.value = [];
@@ -374,6 +377,7 @@ async function unloadOne(path: string) {
 async function restoreSession() {
   if (!snapshot.value.restoreCandidates.length) {
     operationErrors.value = [];
+    statusWarning.value = true;
     statusMessage.value = "暂无上次加载记录，请先选择字体";
     scheduleStatusDismiss();
     return;
@@ -637,9 +641,15 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <section v-if="statusMessage || operationErrors.length" class="operation-status" aria-live="polite">
+      <section
+        v-if="statusMessage || operationErrors.length"
+        class="operation-status"
+        :class="{ 'is-warning': statusWarning }"
+        aria-live="polite"
+      >
         <div v-if="statusMessage" class="status-summary">
           <LoaderCircle v-if="busy" class="status-spinner" :size="16" />
+          <AlertTriangle v-else-if="statusWarning" :size="16" />
           <CheckCircle2 v-else :size="16" />
            <span>
              {{ statusMessage }}
