@@ -372,6 +372,12 @@ async function unloadOne(path: string) {
 }
 
 async function restoreSession() {
+  if (!snapshot.value.restoreCandidates.length) {
+    operationErrors.value = [];
+    statusMessage.value = "暂无上次加载记录，请先选择字体";
+    scheduleStatusDismiss();
+    return;
+  }
   await runBatch("restore_last_session");
 }
 
@@ -534,6 +540,24 @@ onUnmounted(() => {
             <X :size="15" />
           </button>
         </label>
+
+        <button
+          class="button button-secondary"
+          type="button"
+          :disabled="busy"
+          data-testid="load-last-fonts"
+          :aria-label="`加载上次字体，${snapshot.restoreCandidates.length} 个字体可恢复`"
+          :title="snapshot.restoreCandidates.length ? `恢复上次会话的 ${snapshot.restoreCandidates.length} 个字体` : '暂无上次加载记录'"
+          @click="restoreSession"
+        >
+          <RotateCcw :size="17" aria-hidden="true" />
+          <span>加载上次字体</span>
+          <span
+            class="history-count"
+            :class="{ 'is-empty': !snapshot.restoreCandidates.length }"
+            aria-hidden="true"
+          >{{ snapshot.restoreCandidates.length }}</span>
+        </button>
 
         <button class="button button-primary" type="button" :disabled="busy" @click="chooseFonts">
           <FilePlus2 :size="17" />
