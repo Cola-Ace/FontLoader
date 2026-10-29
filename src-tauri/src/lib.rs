@@ -187,47 +187,67 @@ fn dismiss_last_session(state: State<'_, AppState>) -> AppSnapshot {
 }
 
 #[tauri::command]
-async fn request_exit(
+async fn request_exit(app: AppHandle, force: bool) -> Result<ExitResult, String> {
+    exit_application(app, force, false).await
+}
+
+async fn exit_application(
     app: AppHandle,
-    state: State<'_, AppState>,
     force: bool,
+    destroy_window: bool,
 ) -> Result<ExitResult, String> {
+    let state = app.state::<AppState>();
     if state.exit_requested.swap(true, Ordering::SeqCst) {
         return Ok(ExitResult {
             exiting: false,
             errors: state.core.snapshot().exit_errors,
         });
     }
-    let total = state.core.snapshot().fonts.len();
-    let batch_progress = Arc::clone(&state.batch_progress);
-    update_batch_progress(&batch_progress, "unload", 0, total);
-    emit_batch_progress(&app, "unload", 0, total);
+    let (ui_dismissed, mut dismissal_completed) = tauri::async_runtime::channel(1);
+    let ui_app = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let _ = ui_dismissed.try_send(dismiss_exit_ui(&ui_app, destroy_window));
+    }) {
+        state.exit_requested.store(false, Ordering::SeqCst);
+        return Err(error.to_string());
+    }
+    let window_destroy_requested = match dismissal_completed.recv().await.unwrap() {
+        Ok(requested) => requested,
+        Err(error) => {
+            recover_failed_exit(&app);
+            return Err(error.to_string());
+        }
+    };
     let core = Arc::clone(&state.core);
-    let progress_app = app.clone();
-    let progress_state = Arc::clone(&batch_progress);
+    let cleanup_app = app.clone();
     let result = match tauri::async_runtime::spawn_blocking(move || {
-        core.prepare_exit_with_progress(force, |completed| {
-            update_batch_progress(&progress_state, "unload", completed, total);
-            emit_batch_progress(&progress_app, "unload", completed, total);
-        })
+        if window_destroy_requested {
+            while cleanup_app.get_webview_window("main").is_some() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let state = cleanup_app.state::<AppState>();
+            let mut status = state.window_status.lock().unwrap();
+            if matches!(*status, WindowStatus::Destroying { .. }) {
+                *status = WindowStatus::Closed;
+            }
+        }
+        core.prepare_exit(force)
     })
     .await
     {
         Ok(result) => result,
         Err(error) => {
-            clear_batch_progress(&batch_progress);
-            state.exit_requested.store(false, Ordering::SeqCst);
+            recover_failed_exit(&app);
             return Err(error.to_string());
         }
     };
-    clear_batch_progress(&batch_progress);
     update_cached_snapshot(&state.cached_snapshot, state.core.snapshot());
     if result.exiting {
         state.exiting.store(true, Ordering::SeqCst);
         let app_handle = app.clone();
         let _ = app.run_on_main_thread(move || app_handle.exit(0));
     } else {
-        state.exit_requested.store(false, Ordering::SeqCst);
+        recover_failed_exit(&app);
     }
     Ok(result)
 }
@@ -439,79 +459,60 @@ fn destroy_minimized_window(app: &AppHandle) {
 }
 
 fn request_application_exit(app: AppHandle) {
-    let Some(state) = app.try_state::<AppState>() else {
-        return;
-    };
-    if state.exit_requested.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    let has_loaded_fonts = !state.core.snapshot().fonts.is_empty();
-    let window_destroy_requested = if has_loaded_fonts {
-        match app.get_webview_window("main") {
-            Some(window) => {
-                {
-                    let mut status = state.window_status.lock().unwrap();
-                    if !matches!(*status, WindowStatus::Closed) {
-                        *status = WindowStatus::Destroying { reopen: false };
-                    }
-                }
-                if window.destroy().is_err() {
-                    *state.window_status.lock().unwrap() = WindowStatus::Open;
-                    false
-                } else {
-                    true
-                }
-            }
-            None => {
-                *state.window_status.lock().unwrap() = WindowStatus::Closed;
-                false
-            }
-        }
-    } else {
-        false
-    };
-
-    std::thread::spawn(move || {
-        if window_destroy_requested {
-            while app.get_webview_window("main").is_some() {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let state = app.state::<AppState>();
-            let mut status = state.window_status.lock().unwrap();
-            if matches!(*status, WindowStatus::Destroying { .. }) {
-                *status = WindowStatus::Closed;
-            }
-        }
-
-        let state = app.state::<AppState>();
-        let result = state.core.prepare_exit(false);
-        update_cached_snapshot(&state.cached_snapshot, state.core.snapshot());
-        if result.exiting {
-            state.exiting.store(true, Ordering::SeqCst);
-            app.exit(0);
-        } else {
-            state.exit_requested.store(false, Ordering::SeqCst);
-            open_main_window(&app);
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = exit_application(app, false, true).await {
+            eprintln!("退出失败: {error}");
         }
     });
 }
 
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+fn dismiss_exit_ui(app: &AppHandle, destroy_window: bool) -> tauri::Result<bool> {
+    drop(app.remove_tray_by_id(TRAY_ID));
+    let state = app.state::<AppState>();
+    let Some(window) = app.get_webview_window("main") else {
+        *state.window_status.lock().unwrap() = WindowStatus::Closed;
+        return Ok(false);
+    };
+    if !destroy_window {
+        // Keep the invoking WebView alive until its retry response is delivered.
+        window.hide()?;
+        return Ok(false);
+    }
+    *state.window_status.lock().unwrap() = WindowStatus::Destroying { reopen: false };
+    if let Err(error) = window.destroy() {
+        *state.window_status.lock().unwrap() = WindowStatus::Open;
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn recover_failed_exit(app: &AppHandle) {
+    if let Err(error) = setup_tray(app) {
+        eprintln!("恢复托盘图标失败: {error}");
+    }
+    app.state::<AppState>()
+        .exit_requested
+        .store(false, Ordering::SeqCst);
+    open_main_window(app);
+}
+
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "卸载全部并退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
+    let count = app
+        .state::<AppState>()
+        .cached_snapshot
+        .lock()
+        .unwrap()
+        .fonts
+        .len();
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(tray_icon())
-        .tooltip(loaded_count_label(0))
+        .tooltip(loaded_count_label(count))
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => open_main_window(app),
-            "quit" => request_application_exit(app.clone()),
-            _ => {}
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -566,6 +567,11 @@ pub fn run() {
             open_main_window(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => open_main_window(app),
+            "quit" => request_application_exit(app.clone()),
+            _ => {}
+        })
         .invoke_handler(tauri::generate_handler![
             get_initial_state,
             get_batch_progress,
@@ -581,7 +587,7 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir()?;
             let core = FontCore::new(app_data_dir)?;
             app.manage(AppState::new(core));
-            setup_tray(app)?;
+            setup_tray(app.handle())?;
             Ok(())
         })
         .on_window_event(|window, event| {

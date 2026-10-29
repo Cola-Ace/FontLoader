@@ -13,7 +13,7 @@
 
 FontLoader loads `.ttf`, `.otf`, and `.ttc` files through the Windows session-level font API. Fonts become available to other applications during the current session without being copied to the system font directory or installed permanently.
 
-> When closing, FontLoader destroys the WebView first and unloads managed fonts in the background. The process may remain briefly after the window closes and will exit automatically when cleanup finishes. This is expected.
+> When you close the window or choose “卸载全部并退出” (Unload all and exit) from the tray menu, FontLoader destroys the WebView and removes its tray icon before silently unloading managed fonts in the background. The process may remain briefly after both disappear and exits automatically when cleanup finishes. If unloading fails, the tray icon and window return so you can retry or choose to exit anyway.
 
 ## Requirements
 
