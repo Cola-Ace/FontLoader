@@ -24,7 +24,7 @@ const families = computed(() => {
 });
 const showAll = computed(() => expanded.value || !!props.searchTerm.trim());
 const visibleFamilies = computed(() =>
-  showAll.value ? families.value : families.value.slice(0, 3),
+  showAll.value ? families.value : families.value.slice(0, 2),
 );
 
 async function copyFamilies(names: string[], key: string | symbol) {
@@ -96,7 +96,7 @@ onUnmounted(() => window.clearTimeout(copyTimer));
       </li>
     </ul>
     <button
-      v-if="families.length > 3 && !searchTerm.trim()"
+      v-if="families.length > 2 && !searchTerm.trim()"
       class="text-button collection-toggle"
       type="button"
       :aria-expanded="expanded"
@@ -104,7 +104,7 @@ onUnmounted(() => window.clearTimeout(copyTimer));
     >
       <ChevronUp v-if="expanded" :size="14" />
       <ChevronDown v-else :size="14" />
-      {{ expanded ? "收起" : `展开其余 ${families.length - 3} 个字体族` }}
+      {{ expanded ? "收起" : `展开其余 ${families.length - 2} 个字体族` }}
     </button>
     <span class="copy-feedback" :class="{ 'visually-hidden': !copyFailed }" role="status">
       {{ copyMessage }}

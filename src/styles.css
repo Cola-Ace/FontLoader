@@ -9,7 +9,7 @@
   --border: #d9dde3;
   --border-strong: #c5cad2;
   --text: #202124;
-  --text-muted: #68707c;
+  --text-muted: #535d6a;
   --primary: #1769aa;
   --primary-hover: #12598f;
   --danger: #b4232d;
@@ -329,8 +329,8 @@ input[type="checkbox"]:disabled {
 
 .font-row {
   align-items: start;
-  padding-top: 16px;
-  padding-bottom: 16px;
+  padding-top: 10px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -351,7 +351,7 @@ input[type="checkbox"]:disabled {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 9px;
+  gap: 6px;
 }
 
 .font-file-header {
@@ -371,7 +371,7 @@ input[type="checkbox"]:disabled {
 
 .family-list {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -699,7 +699,7 @@ time {
   --border: #3a3f47;
   --border-strong: #505761;
   --text: #ecedef;
-  --text-muted: #aeb5bf;
+  --text-muted: #c0c6cf;
   --primary: #4b9bd8;
   --primary-hover: #61abe2;
   --danger: #ff8d98;

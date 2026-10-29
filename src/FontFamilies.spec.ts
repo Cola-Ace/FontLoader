@@ -35,7 +35,7 @@ describe("FontFamilies", () => {
 
     expect(wrapper.get(".collection-count").text()).toBe("4 个字体族 · 6 个字体面");
     expect(wrapper.findAll(".family-name").map(row => row.text())).toEqual([
-      "Example Sans", "思源黑体", "Example Serif",
+      "Example Sans", "思源黑体",
     ]);
     expect(wrapper.findAll(".family-styles")[0].text()).toBe("Regular · Bold");
     expect(wrapper.get(".file-name").attributes("title")).toBe(font.canonicalPath);
@@ -45,11 +45,36 @@ describe("FontFamilies", () => {
   it("expands and collapses the remaining families", async () => {
     const wrapper = mount(FontFamilies, { props: { font, searchTerm: "" } });
 
+    expect(wrapper.get(".collection-toggle").text()).toBe("展开其余 2 个字体族");
+    expect(wrapper.get(".collection-toggle").attributes("aria-expanded")).toBe("false");
     await wrapper.get(".collection-toggle").trigger("click");
     expect(wrapper.findAll(".family-row")).toHaveLength(4);
+    expect(wrapper.get(".collection-toggle").text()).toBe("收起");
     expect(wrapper.get(".collection-toggle").attributes("aria-expanded")).toBe("true");
     await wrapper.get(".collection-toggle").trigger("click");
-    expect(wrapper.findAll(".family-row")).toHaveLength(3);
+    expect(wrapper.findAll(".family-row")).toHaveLength(2);
+    expect(wrapper.get(".collection-toggle").text()).toBe("展开其余 2 个字体族");
+    expect(wrapper.get(".collection-toggle").attributes("aria-expanded")).toBe("false");
+    wrapper.unmount();
+  });
+
+  it.each([1, 2, 3])("previews at most two of %i unique families", async count => {
+    const faces = font.faces.filter(face =>
+      ["Example Sans", "思源黑体", "Example Serif"].slice(0, count).includes(face.family),
+    );
+    const wrapper = mount(FontFamilies, {
+      props: { font: { ...font, faces }, searchTerm: "" },
+    });
+
+    expect(wrapper.findAll(".family-row")).toHaveLength(Math.min(count, 2));
+    expect(wrapper.find(".collection-toggle").exists()).toBe(count > 2);
+    if (count > 2) {
+      expect(wrapper.get(".collection-toggle").text()).toBe("展开其余 1 个字体族");
+      await wrapper.get(".collection-toggle").trigger("click");
+      expect(wrapper.findAll(".family-row")).toHaveLength(3);
+      await wrapper.get(".collection-toggle").trigger("click");
+      expect(wrapper.findAll(".family-row")).toHaveLength(2);
+    }
     wrapper.unmount();
   });
 
@@ -60,7 +85,18 @@ describe("FontFamilies", () => {
     expect(wrapper.findAll(".family-name").map(row => row.text())).toContain("Example Mono");
     expect(wrapper.find(".collection-toggle").exists()).toBe(false);
     await wrapper.setProps({ searchTerm: "" });
-    expect(wrapper.findAll(".family-row")).toHaveLength(3);
+    expect(wrapper.findAll(".family-row")).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  it("preserves the expanded state after clearing search", async () => {
+    const wrapper = mount(FontFamilies, { props: { font, searchTerm: "" } });
+
+    await wrapper.get(".collection-toggle").trigger("click");
+    await wrapper.setProps({ searchTerm: "Example Mono" });
+    await wrapper.setProps({ searchTerm: "" });
+    expect(wrapper.findAll(".family-row")).toHaveLength(4);
+    expect(wrapper.get(".collection-toggle").attributes("aria-expanded")).toBe("true");
     wrapper.unmount();
   });
 
