@@ -38,6 +38,8 @@ describe("FontFamilies", () => {
       "Example Sans", "思源黑体",
     ]);
     expect(wrapper.findAll(".family-styles")[0].text()).toBe("Regular · Bold");
+    expect(wrapper.get(".family-name-line").element.children[1].className).toBe("family-styles");
+    expect(wrapper.get(".family-name-line").element.children[2].classList).toContain("copy-family");
     expect(wrapper.get(".file-name").attributes("title")).toBe(font.canonicalPath);
     wrapper.unmount();
   });
@@ -114,13 +116,13 @@ describe("FontFamilies", () => {
     wrapper.unmount();
   });
 
-  it("copies all unique families including collapsed ones, one per line", async () => {
+  it("does not offer a copy-all action for TTC collections", async () => {
     const wrapper = mount(FontFamilies, { props: { font, searchTerm: "" } });
 
-    await wrapper.get(".copy-all").trigger("click");
-    await flushPromises();
-    expect(writeText).toHaveBeenCalledWith("Example Sans\n思源黑体\nExample Serif\nExample Mono");
-    expect(wrapper.get(".copy-all").text()).toBe("已复制");
+    expect(wrapper.find(".copy-all").exists()).toBe(false);
+    await wrapper.get(".collection-toggle").trigger("click");
+    expect(wrapper.find(".copy-all").exists()).toBe(false);
+    expect(wrapper.findAll(".copy-family")).toHaveLength(4);
     wrapper.unmount();
   });
 
@@ -139,7 +141,7 @@ describe("FontFamilies", () => {
     wrapper.unmount();
   });
 
-  it("keeps a single-face font compact with its own copy action", () => {
+  it("keeps a single-face font compact and copies its name without Regular", async () => {
     const wrapper = mount(FontFamilies, {
       props: {
         font: { ...font, format: "TTF", faces: [font.faces[0]] },
@@ -151,6 +153,10 @@ describe("FontFamilies", () => {
     expect(wrapper.find(".collection-count").exists()).toBe(false);
     expect(wrapper.find(".copy-all").exists()).toBe(false);
     expect(wrapper.find(".collection-toggle").exists()).toBe(false);
+    expect(wrapper.get(".family-styles").text()).toBe("Regular");
+    await wrapper.get(".copy-family").trigger("click");
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith("Example Sans");
     wrapper.unmount();
   });
 });
