@@ -142,7 +142,7 @@ describe("App", () => {
     wrapper.unmount();
   });
 
-  it("shows the last-session restore action", async () => {
+  it("shows the header restore button without the old session banner", async () => {
     mockInitial({
       ...emptySnapshot(),
       restoreCandidates: ["C:\\Fonts\\Example.ttf", "C:\\Fonts\\Other.otf"],
@@ -150,8 +150,9 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("2 个字体可恢复");
-    expect(wrapper.text()).toContain("恢复");
+    expect(wrapper.find(".restore-band").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("检测到上次会话");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').text()).toContain("加载上次字体");
     expect(wrapper.get(".history-count").text()).toBe("2");
     expect(wrapper.get(".history-count").classes()).not.toContain("is-empty");
     expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("aria-label")).toBe(
@@ -486,7 +487,7 @@ describe("App", () => {
     wrapper.unmount();
   });
 
-  it("hides the last-session restore action after choosing fonts", async () => {
+  it("clears the history count but keeps the restore button after choosing fonts", async () => {
     const initialSnapshot = {
       ...emptySnapshot(),
       restoreCandidates: ["C:\\Fonts\\Previous.ttf"],
@@ -510,11 +511,12 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.find(".restore-band").exists()).toBe(true);
+    expect(wrapper.get(".history-count").text()).toBe("1");
     await wrapper.get(".button-primary").trigger("click");
     await flushPromises();
 
-    expect(wrapper.find(".restore-band").exists()).toBe(false);
+    expect(wrapper.get(".history-count").text()).toBe("0");
+    expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("disabled")).toBeUndefined();
   });
 
   it("shows progress while loading files", async () => {

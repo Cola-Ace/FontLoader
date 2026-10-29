@@ -381,10 +381,6 @@ async function restoreSession() {
   await runBatch("restore_last_session");
 }
 
-async function dismissSession() {
-  applySnapshot(await invoke<AppSnapshot>("dismiss_last_session"));
-}
-
 async function retryExit(force: boolean) {
   busy.value = true;
   operationProgress.value = {
@@ -565,22 +561,6 @@ onUnmounted(() => {
         </button>
       </div>
     </header>
-
-    <section v-if="snapshot.restoreCandidates.length" class="restore-band">
-      <div>
-        <strong>检测到上次会话</strong>
-        <span>{{ snapshot.restoreCandidates.length }} 个字体可恢复</span>
-      </div>
-      <div class="band-actions">
-        <button class="button button-secondary" type="button" :disabled="busy" @click="dismissSession">
-          忽略
-        </button>
-        <button class="button button-primary" type="button" :disabled="busy" @click="restoreSession">
-          <RotateCcw :size="16" />
-          恢复
-        </button>
-      </div>
-    </section>
 
     <main class="content">
       <div class="list-toolbar">
