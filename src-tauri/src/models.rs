@@ -39,6 +39,8 @@ pub struct AppSnapshot {
     pub fonts: Vec<FontEntry>,
     pub restore_candidates: Vec<String>,
     pub exit_errors: Vec<OperationError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_warning: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

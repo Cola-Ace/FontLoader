@@ -234,6 +234,16 @@ h1 {
   padding: 14px 20px 18px;
 }
 
+.session-warning {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: 6px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+
 .list-toolbar {
   display: flex;
   align-items: center;

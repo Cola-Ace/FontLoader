@@ -16,6 +16,7 @@ struct CoreData {
     fonts: BTreeMap<String, FontEntry>,
     restore_candidates: Vec<String>,
     exit_errors: Vec<OperationError>,
+    session_warning: Option<String>,
 }
 
 pub struct FontCore {
@@ -26,7 +27,30 @@ pub struct FontCore {
 impl FontCore {
     pub fn new(app_data_dir: PathBuf) -> io::Result<Self> {
         let session = SessionFiles::new(app_data_dir)?;
-        let active = session.read_active().unwrap_or_default();
+        let (active, session_warning) = match session.read_active() {
+            Ok(paths) => (paths, None),
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                let archived = session.archive_invalid_active().map_err(|archive_error| {
+                    io::Error::new(
+                        archive_error.kind(),
+                        format!("无法保留损坏的活动会话记录：{archive_error}。读取错误：{error}"),
+                    )
+                })?;
+                (
+                    Vec::new(),
+                    Some(format!(
+                        "无法读取活动会话记录，原文件已保存在 {}。{error}",
+                        archived.display()
+                    )),
+                )
+            }
+            Err(error) => {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("无法读取 active-session.json：{error}"),
+                ));
+            }
+        };
         let previous = session.read_last().unwrap_or_default();
         let mut candidates = Vec::new();
         let mut seen = HashSet::new();
@@ -47,14 +71,20 @@ impl FontCore {
                 cleaned_any = true;
             }
         }
+        let saved = if active.is_empty() {
+            Ok(())
+        } else {
+            session.write_active(&[])
+        };
         if cleaned_any {
             let _ = broadcast_font_change();
         }
-        session.write_active(&[])?;
+        saved?;
 
         Ok(Self {
             data: Mutex::new(CoreData {
                 restore_candidates: candidates,
+                session_warning,
                 ..CoreData::default()
             }),
             session,
@@ -142,9 +172,6 @@ impl FontCore {
             progress(completed);
         }
 
-        if !result.changed.is_empty() {
-            let _ = broadcast_font_change();
-        }
         let remaining = data
             .restore_candidates
             .iter()
@@ -170,6 +197,9 @@ impl FontCore {
             result
                 .errors
                 .push(operation_error("", "session_log_failed", error.to_string()));
+        }
+        if !result.changed.is_empty() {
+            let _ = broadcast_font_change();
         }
         result.snapshot = snapshot_from(data);
         result
@@ -219,12 +249,12 @@ impl FontCore {
         }
 
         if !result.changed.is_empty() {
-            let _ = broadcast_font_change();
             if let Err(error) = self.write_active(data) {
                 result
                     .errors
                     .push(operation_error("", "session_log_failed", error.to_string()));
             }
+            let _ = broadcast_font_change();
         }
         result.snapshot = snapshot_from(data);
         result
@@ -322,6 +352,7 @@ fn snapshot_from(data: &CoreData) -> AppSnapshot {
         fonts: data.fonts.values().cloned().collect(),
         restore_candidates: data.restore_candidates.clone(),
         exit_errors: data.exit_errors.clone(),
+        session_warning: data.session_warning.clone(),
     }
 }
 

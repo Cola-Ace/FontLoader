@@ -593,6 +593,9 @@ onUnmounted(() => {
     </header>
 
     <main class="content">
+      <p v-if="snapshot.sessionWarning" class="session-warning" role="status">
+        {{ snapshot.sessionWarning }}
+      </p>
       <div class="list-toolbar">
         <div class="list-toolbar-start">
           <label class="select-all">

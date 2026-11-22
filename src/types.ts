@@ -23,6 +23,7 @@ export interface AppSnapshot {
   fonts: FontEntry[];
   restoreCandidates: string[];
   exitErrors: OperationError[];
+  sessionWarning?: string;
 }
 
 export interface BatchResult {
