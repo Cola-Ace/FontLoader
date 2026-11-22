@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import FontFamilies from "./FontFamilies.vue";
+import InterfaceFontSettings from "./InterfaceFontSettings.vue";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -525,6 +526,8 @@ onUnmounted(() => {
           <Moon v-if="theme === 'light'" :size="17" />
           <Sun v-else :size="17" />
         </button>
+
+        <InterfaceFontSettings />
 
         <label class="search-field">
           <Search :size="16" aria-hidden="true" />

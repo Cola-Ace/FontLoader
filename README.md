@@ -53,6 +53,7 @@ The release executable is written to Cargo's release target directory, normally 
 3. Use search and selection controls to find fonts and unload them individually or in batches.
 4. Minimize the window to keep the app in the system tray. Open it again from the tray when needed.
 5. Click “加载上次字体” (Load previous fonts) in the header to restore all fonts from the previous session. The badge shows how many fonts can be restored. If no history is available, a notice prompts you to choose fonts first.
+6. Click “界面字体设置” (Interface font settings) in the header and enter the primary font family name. Enter one fallback family per line in priority order, then click “保存” (Save).
 
 Font registration is temporary: FontLoader does not copy font files, modify the registry, or provide permanent font installation. A restart of Windows removes the session-level registrations.
 
