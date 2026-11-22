@@ -6,6 +6,7 @@ const storageKey = "font-loader-interface-fonts";
 const dialog = ref<HTMLDialogElement>();
 const primary = ref("");
 const fallbacks = ref("");
+let localFaces: FontFace[] = [];
 
 function loadFonts() {
   const savedFonts = localStorage.getItem(storageKey) ?? "";
@@ -22,13 +23,26 @@ function applyFonts() {
     .split("\n")
     .map(family => family.trim())
     .filter(Boolean);
+  const families = [primaryFamily, ...fallbackFamilies];
+  localFaces.forEach(face => document.fonts.delete(face));
+  localFaces = [];
+  const [primarySources, ...fallbackSources] = families.map((family, index) => {
+    if (!family) return "";
+    const name = quoteFamily(family);
+    const alias = `font-loader-local-face-${index}`;
+    const face = new FontFace(alias, `local(${name})`);
+    document.fonts.add(face);
+    localFaces.push(face);
+    return `${name}, ${quoteFamily(alias)}`;
+  });
+
   const style = document.documentElement.style;
-  style.setProperty("--interface-primary-font", primaryFamily ? quoteFamily(primaryFamily) : "");
+  style.setProperty("--interface-primary-font", primarySources);
   style.setProperty(
     "--interface-fallback-fonts",
-    fallbackFamilies.length ? `${fallbackFamilies.map(quoteFamily).join(", ")},` : "",
+    fallbackSources.length ? `${fallbackSources.join(", ")},` : "",
   );
-  return [primaryFamily, ...fallbackFamilies].join("\n");
+  return families.join("\n");
 }
 
 function openSettings() {
@@ -88,7 +102,7 @@ onMounted(() => {
             rows="4"
             aria-describedby="interface-fallback-help"
           ></textarea>
-          <p id="interface-fallback-help">输入字体族名称，每行一个，按从上到下的顺序尝试。</p>
+          <p id="interface-fallback-help">输入字体族名称、字体全名或 PostScript 名，每行一个，按从上到下的顺序尝试。</p>
         </div>
 
         <div class="dialog-actions">
