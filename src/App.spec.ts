@@ -9,7 +9,8 @@ import type {
   BatchResult,
 } from "./types";
 
-const { invoke, listen, open } = vi.hoisted(() => ({
+const { confirm, invoke, listen, open } = vi.hoisted(() => ({
+  confirm: vi.fn(),
   invoke: vi.fn(),
   listen: vi.fn(),
   open: vi.fn(),
@@ -17,7 +18,7 @@ const { invoke, listen, open } = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm, open }));
 
 const emptySnapshot = (): AppSnapshot => ({
   fonts: [],
@@ -44,6 +45,7 @@ function mockInitial(snapshot: AppSnapshot) {
 
 describe("App", () => {
   beforeEach(() => {
+    confirm.mockReset();
     invoke.mockReset();
     listen.mockReset();
     listen.mockResolvedValue(() => {});
@@ -111,7 +113,11 @@ describe("App", () => {
     const completion: BatchCompletion = {
       operation: "load",
       result: {
-        snapshot: { ...emptySnapshot(), fonts: [font] },
+        snapshot: {
+          ...emptySnapshot(),
+          fonts: [font],
+          restoreCandidates: ["C:\\Fonts\\Pending.ttf"],
+        },
         changed: [font.canonicalPath],
         skipped: [],
         errors: [],
@@ -139,6 +145,7 @@ describe("App", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("加载成功 1 个");
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
+    expect(wrapper.get(".history-count").text()).toBe("1");
     expect(wrapper.find(".operation-status").exists()).toBe(true);
     wrapper.unmount();
   });
@@ -240,8 +247,23 @@ describe("App", () => {
     wrapper.unmount();
   });
 
-  it("shows partial failures when loading previous-session fonts", async () => {
+  it("keeps failed previous-session fonts available for retry", async () => {
     const missingPath = "C:\\Fonts\\Missing.ttf";
+    const restoredFont = { ...font, canonicalPath: missingPath, fileName: "Missing.ttf" };
+    const restore = vi
+      .fn()
+      .mockResolvedValueOnce({
+        snapshot: { ...emptySnapshot(), fonts: [font], restoreCandidates: [missingPath] },
+        changed: [font.canonicalPath],
+        skipped: [],
+        errors: [{ path: missingPath, code: "file_missing", message: "文件不存在" }],
+      } satisfies BatchResult)
+      .mockResolvedValueOnce({
+        snapshot: { ...emptySnapshot(), fonts: [font, restoredFont] },
+        changed: [missingPath],
+        skipped: [],
+        errors: [],
+      } satisfies BatchResult);
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
         return Promise.resolve({
@@ -250,12 +272,7 @@ describe("App", () => {
         });
       }
       if (command === "restore_last_session") {
-        return Promise.resolve({
-          snapshot: { ...emptySnapshot(), fonts: [font] },
-          changed: [font.canonicalPath],
-          skipped: [],
-          errors: [{ path: missingPath, code: "file_missing", message: "文件不存在" }],
-        } satisfies BatchResult);
+        return restore();
       }
       return Promise.resolve(undefined);
     });
@@ -269,6 +286,14 @@ describe("App", () => {
     expect(wrapper.get(".error-list").text()).toContain(missingPath);
     expect(wrapper.get(".error-list").text()).toContain("文件不存在");
     expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
+    expect(wrapper.get(".history-count").text()).toBe("1");
+
+    await wrapper.get('[data-testid="load-last-fonts"]').trigger("click");
+    await flushPromises();
+
+    expect(restore).toHaveBeenCalledTimes(2);
+    expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(2);
+    expect(wrapper.get(".history-count").text()).toBe("0");
     wrapper.unmount();
   });
 
@@ -491,12 +516,11 @@ describe("App", () => {
     wrapper.unmount();
   });
 
-  it("clears the history count but keeps the restore button after choosing fonts", async () => {
+  it("keeps unrelated restore candidates after choosing fonts", async () => {
     const initialSnapshot = {
       ...emptySnapshot(),
       restoreCandidates: ["C:\\Fonts\\Previous.ttf"],
     };
-    mockInitial(initialSnapshot);
     open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
@@ -519,8 +543,41 @@ describe("App", () => {
     await wrapper.get(".button-primary").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".history-count").text()).toBe("0");
+    expect(wrapper.get(".history-count").text()).toBe("1");
     expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("clears pending restore history only after confirmation", async () => {
+    const initialSnapshot = {
+      ...emptySnapshot(),
+      restoreCandidates: ["C:\\Fonts\\Previous.ttf"],
+    };
+    confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") {
+        return Promise.resolve(initialSnapshot);
+      }
+      if (command === "dismiss_last_session") {
+        return Promise.resolve(emptySnapshot());
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+    const clearHistory = 'button[aria-label="清除待恢复记录"]';
+
+    await wrapper.get(clearHistory).trigger("click");
+    await flushPromises();
+    expect(invoke).not.toHaveBeenCalledWith("dismiss_last_session");
+    expect(wrapper.get(".history-count").text()).toBe("1");
+
+    await wrapper.get(clearHistory).trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("dismiss_last_session");
+    expect(wrapper.get(".history-count").text()).toBe("0");
+    expect(wrapper.find(clearHistory).exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it("shows progress while loading files", async () => {

@@ -2,12 +2,13 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import FontFamilies from "./FontFamilies.vue";
 import InterfaceFontSettings from "./InterfaceFontSettings.vue";
 import {
   AlertTriangle,
   CheckCircle2,
+  Eraser,
   FilePlus2,
   LoaderCircle,
   Moon,
@@ -42,6 +43,9 @@ const statusMessage = ref("");
 const statusWarning = ref(false);
 const operationProgress = ref<BatchProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
+const exitSessionSaveFailed = computed(() =>
+  exitErrors.value.some(error => error.code === "session_log_failed"),
+);
 const theme = ref<"light" | "dark">("light");
 type SortMode = "name-asc" | "name-desc" | "loaded-at-asc" | "loaded-at-desc";
 
@@ -256,11 +260,7 @@ function clearRecoveredProgress() {
 
 function applyBatchCompletion(completion: BatchCompletion) {
   clearRecoveredProgress();
-  applySnapshot(
-    completion.operation === "load"
-      ? { ...completion.result.snapshot, restoreCandidates: [] }
-      : completion.result.snapshot,
-  );
+  applySnapshot(completion.result.snapshot);
   summarizeResult(completion.result, completion.operation === "unload" ? "卸载" : "加载");
 }
 
@@ -276,11 +276,7 @@ async function runBatch(
   });
   try {
     const result = await invoke<BatchResult>(command, args);
-    applySnapshot(
-      command === "load_fonts"
-        ? { ...result.snapshot, restoreCandidates: [] }
-        : result.snapshot,
-    );
+    applySnapshot(result.snapshot);
     summarizeResult(result, command === "unload_fonts" ? "卸载" : "加载");
     void invoke("take_pending_batch_completion").catch(() => {});
   } catch (error) {
@@ -316,18 +312,11 @@ async function chooseFonts() {
     return;
   }
   const paths = Array.isArray(chosen) ? chosen : [chosen];
-  await importFontPaths(paths);
+  await runBatch("load_fonts", { paths });
 }
 
 function isSupportedFontPath(path: string) {
   return /\.(ttf|otf|ttc)$/i.test(path);
-}
-
-async function importFontPaths(paths: string[]) {
-  if (snapshot.value.restoreCandidates.length) {
-    applySnapshot({ ...snapshot.value, restoreCandidates: [] });
-  }
-  await runBatch("load_fonts", { paths });
 }
 
 function handleDragEnter() {
@@ -361,7 +350,7 @@ async function handleDragDrop(payload: DragDropPayload) {
   if (ignoredCount) {
     showDropNotice(`已忽略 ${ignoredCount} 个不支持的文件`);
   }
-  await importFontPaths(supportedPaths);
+  await runBatch("load_fonts", { paths: supportedPaths });
 }
 
 async function unloadSelected() {
@@ -384,6 +373,28 @@ async function restoreSession() {
     return;
   }
   await runBatch("restore_last_session");
+}
+
+async function dismissRestoreHistory() {
+  busy.value = true;
+  try {
+    const confirmed = await confirm("清除后，将无法用「加载上次字体」恢复这些字体。", {
+      title: "清除待恢复记录",
+      okLabel: "清除记录",
+      cancelLabel: "取消",
+    });
+    if (confirmed) {
+      applySnapshot(await invoke<AppSnapshot>("dismiss_last_session"));
+      dismissStatus();
+    }
+  } catch (error) {
+    clearStatusTimer();
+    statusWarning.value = true;
+    statusMessage.value = "无法清除待恢复记录";
+    operationErrors.value = [{ path: "", code: "session_log_failed", message: String(error) }];
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function retryExit(force: boolean) {
@@ -562,6 +573,18 @@ onUnmounted(() => {
           >{{ snapshot.restoreCandidates.length }}</span>
         </button>
 
+        <button
+          v-if="snapshot.restoreCandidates.length"
+          class="icon-button"
+          type="button"
+          :disabled="busy"
+          aria-label="清除待恢复记录"
+          title="清除待恢复记录"
+          @click="dismissRestoreHistory"
+        >
+          <Eraser :size="16" aria-hidden="true" />
+        </button>
+
         <button class="button button-primary" type="button" :disabled="busy" @click="chooseFonts">
           <FilePlus2 :size="17" />
           选择字体
@@ -687,10 +710,12 @@ onUnmounted(() => {
       <section class="exit-dialog" role="dialog" aria-modal="true" aria-labelledby="exit-dialog-title">
         <AlertTriangle :size="22" />
         <div>
-          <h2 id="exit-dialog-title">部分字体卸载失败</h2>
+          <h2 id="exit-dialog-title">
+            {{ exitSessionSaveFailed ? "退出前会话保存失败" : "部分字体卸载失败" }}
+          </h2>
           <ul>
             <li v-for="error in exitErrors" :key="`${error.path}-${error.code}`">
-              <strong>{{ error.path }}</strong>
+              <strong>{{ error.path || "会话日志" }}</strong>
               <span>{{ error.message }}</span>
             </li>
           </ul>
@@ -700,7 +725,7 @@ onUnmounted(() => {
             </button>
             <button class="button button-primary" type="button" :disabled="busy" @click="retryExit(false)">
               <RotateCcw :size="16" />
-              重试卸载
+              {{ exitSessionSaveFailed ? "重试退出" : "重试卸载" }}
             </button>
           </div>
         </div>

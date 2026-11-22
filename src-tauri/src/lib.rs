@@ -180,10 +180,13 @@ async fn restore_last_session(
 }
 
 #[tauri::command]
-fn dismiss_last_session(state: State<'_, AppState>) -> AppSnapshot {
-    let snapshot = state.core.dismiss_last_session();
+fn dismiss_last_session(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
+    let snapshot = state
+        .core
+        .dismiss_last_session()
+        .map_err(|error| error.to_string())?;
     update_cached_snapshot(&state.cached_snapshot, snapshot.clone());
-    snapshot
+    Ok(snapshot)
 }
 
 #[tauri::command]

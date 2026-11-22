@@ -37,6 +37,9 @@ impl FontCore {
                 candidates.push(path.clone());
             }
         }
+        if !active.is_empty() && candidates != previous {
+            session.write_last(&candidates)?;
+        }
 
         let mut cleaned_any = false;
         for path in &active {
@@ -63,16 +66,20 @@ impl FontCore {
         snapshot_from(&data)
     }
 
-    pub fn load_fonts_with_progress<F>(&self, paths: Vec<String>, mut progress: F) -> BatchResult
+    pub fn load_fonts_with_progress<F>(&self, paths: Vec<String>, progress: F) -> BatchResult
     where
         F: FnMut(usize),
     {
         let mut data = self.data.lock().unwrap();
-        if !data.restore_candidates.is_empty() {
-            data.restore_candidates.clear();
-            let _ = self.session.write_last(&[]);
-        }
+        self.load_fonts(&mut data, paths, progress)
+    }
+
+    fn load_fonts<F>(&self, data: &mut CoreData, paths: Vec<String>, mut progress: F) -> BatchResult
+    where
+        F: FnMut(usize),
+    {
         let mut result = BatchResult::default();
+        let mut loaded_paths = HashSet::new();
         let mut completed = 0;
 
         for requested_path in paths {
@@ -91,6 +98,7 @@ impl FontCore {
                 let canonical_path = canonical.to_string_lossy().into_owned();
                 let key = normalized_key(&canonical_path);
                 if data.fonts.contains_key(&key) {
+                    loaded_paths.insert(normalized_key(&requested_path));
                     result.skipped.push(canonical_path);
                     break 'item;
                 }
@@ -127,6 +135,7 @@ impl FontCore {
                     loaded_at: Utc::now().to_rfc3339(),
                 };
                 data.fonts.insert(key, entry);
+                loaded_paths.insert(normalized_key(&requested_path));
                 result.changed.push(canonical_path);
             }
             completed += 1;
@@ -135,21 +144,54 @@ impl FontCore {
 
         if !result.changed.is_empty() {
             let _ = broadcast_font_change();
-            if let Err(error) = self.write_active(&data) {
-                result
-                    .errors
-                    .push(operation_error("", "session_log_failed", error.to_string()));
-            }
         }
-        result.snapshot = snapshot_from(&data);
+        let remaining = data
+            .restore_candidates
+            .iter()
+            .filter(|path| {
+                let key = normalized_key(path);
+                !loaded_paths.contains(&key) && !data.fonts.contains_key(&key)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let candidates_changed = remaining.len() != data.restore_candidates.len();
+        let saved = if !result.changed.is_empty() || candidates_changed {
+            self.write_active(data).and_then(|()| {
+                if candidates_changed {
+                    self.session.write_last(&remaining)?;
+                    data.restore_candidates = remaining;
+                }
+                Ok(())
+            })
+        } else {
+            Ok(())
+        };
+        if let Err(error) = saved {
+            result
+                .errors
+                .push(operation_error("", "session_log_failed", error.to_string()));
+        }
+        result.snapshot = snapshot_from(data);
         result
     }
 
-    pub fn unload_fonts_with_progress<F>(&self, paths: Vec<String>, mut progress: F) -> BatchResult
+    pub fn unload_fonts_with_progress<F>(&self, paths: Vec<String>, progress: F) -> BatchResult
     where
         F: FnMut(usize),
     {
         let mut data = self.data.lock().unwrap();
+        self.unload_fonts(&mut data, paths, progress)
+    }
+
+    fn unload_fonts<F>(
+        &self,
+        data: &mut CoreData,
+        paths: Vec<String>,
+        mut progress: F,
+    ) -> BatchResult
+    where
+        F: FnMut(usize),
+    {
         let mut result = BatchResult::default();
         let mut completed = 0;
 
@@ -178,13 +220,13 @@ impl FontCore {
 
         if !result.changed.is_empty() {
             let _ = broadcast_font_change();
-            if let Err(error) = self.write_active(&data) {
+            if let Err(error) = self.write_active(data) {
                 result
                     .errors
                     .push(operation_error("", "session_log_failed", error.to_string()));
             }
         }
-        result.snapshot = snapshot_from(&data);
+        result.snapshot = snapshot_from(data);
         result
     }
 
@@ -192,20 +234,16 @@ impl FontCore {
     where
         F: FnMut(usize),
     {
-        let paths = {
-            let mut data = self.data.lock().unwrap();
-            let paths = std::mem::take(&mut data.restore_candidates);
-            let _ = self.session.write_last(&[]);
-            paths
-        };
-        self.load_fonts_with_progress(paths, progress)
+        let mut data = self.data.lock().unwrap();
+        let paths = data.restore_candidates.clone();
+        self.load_fonts(&mut data, paths, progress)
     }
 
-    pub fn dismiss_last_session(&self) -> AppSnapshot {
+    pub fn dismiss_last_session(&self) -> io::Result<AppSnapshot> {
         let mut data = self.data.lock().unwrap();
+        self.session.write_last(&[])?;
         data.restore_candidates.clear();
-        let _ = self.session.write_last(&[]);
-        snapshot_from(&data)
+        Ok(snapshot_from(&data))
     }
 
     pub fn prepare_exit(&self, force: bool) -> ExitResult {
@@ -216,28 +254,55 @@ impl FontCore {
     where
         F: FnMut(usize),
     {
-        let paths = {
-            let data = self.data.lock().unwrap();
-            data.fonts
-                .values()
-                .map(|entry| entry.canonical_path.clone())
-                .collect::<Vec<_>>()
-        };
-        let _ = self.session.write_last(&paths);
-        let batch = self.unload_fonts_with_progress(paths, progress);
         let mut data = self.data.lock().unwrap();
+        let paths = data
+            .fonts
+            .values()
+            .map(|entry| entry.canonical_path.clone())
+            .collect::<Vec<_>>();
+        let mut restore_paths = paths.clone();
+        restore_paths.extend(
+            data.restore_candidates
+                .iter()
+                .filter(|path| !data.fonts.contains_key(&normalized_key(path)))
+                .cloned(),
+        );
+        let mut errors = Vec::new();
+        if let Err(error) = self.session.write_last(&restore_paths) {
+            errors.push(operation_error("", "session_log_failed", error.to_string()));
+            if !force {
+                data.exit_errors = errors.clone();
+                return ExitResult {
+                    exiting: false,
+                    errors,
+                };
+            }
+        }
+        let batch = self.unload_fonts(&mut data, paths, progress);
+        errors.extend(batch.errors);
 
-        if batch.errors.is_empty() || force {
+        if errors.is_empty() || force {
             data.exit_errors.clear();
             ExitResult {
                 exiting: true,
-                errors: batch.errors,
+                errors,
             }
         } else {
-            data.exit_errors = batch.errors.clone();
+            let mut seen: HashSet<_> = data
+                .restore_candidates
+                .iter()
+                .map(|path| normalized_key(path))
+                .collect();
+            data.restore_candidates.extend(
+                batch
+                    .changed
+                    .into_iter()
+                    .filter(|path| seen.insert(normalized_key(path))),
+            );
+            data.exit_errors = errors.clone();
             ExitResult {
                 exiting: false,
-                errors: batch.errors,
+                errors,
             }
         }
     }
@@ -274,7 +339,7 @@ fn operation_error(path: impl Into<String>, code: &str, message: String) -> Oper
 
 #[cfg(test)]
 mod tests {
-    use super::{normalized_key, FontCore};
+    use super::{normalized_key, FontCore, SessionFiles};
     use std::{fs, path::PathBuf};
 
     #[test]
@@ -283,6 +348,99 @@ mod tests {
             normalized_key("C:/Fonts/Example.TTF"),
             normalized_key("c:\\fonts\\example.ttf"),
         );
+    }
+
+    #[test]
+    fn keeps_pending_history_across_empty_exits_until_dismissed() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let files = SessionFiles::new(root.clone()).unwrap();
+        let missing = root.join("missing.ttf").to_string_lossy().into_owned();
+        files.write_active(std::slice::from_ref(&missing)).unwrap();
+
+        let core = FontCore::new(root.clone()).unwrap();
+        assert_eq!(core.snapshot().restore_candidates, [missing.clone()]);
+        let failed = core.restore_last_session_with_progress(|_| {});
+        assert_eq!(failed.errors[0].code, "file_missing");
+        assert_eq!(failed.snapshot.restore_candidates, [missing.clone()]);
+        assert!(core.prepare_exit(false).exiting);
+
+        let restarted = FontCore::new(root.clone()).unwrap();
+        assert_eq!(restarted.snapshot().restore_candidates, [missing]);
+        assert!(restarted
+            .dismiss_last_session()
+            .unwrap()
+            .restore_candidates
+            .is_empty());
+        assert!(restarted.prepare_exit(false).exiting);
+        assert!(FontCore::new(root)
+            .unwrap()
+            .snapshot()
+            .restore_candidates
+            .is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restores_only_pending_fonts_after_a_partial_failure() {
+        let fonts_dir = PathBuf::from(std::env::var_os("WINDIR").unwrap()).join("Fonts");
+        let source = fs::read_dir(fonts_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("ttf"))
+            })
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let files = SessionFiles::new(root.clone()).unwrap();
+        let first = root.join("first.ttf");
+        let second = root.join("second.ttf");
+        let first_path = first.to_string_lossy().into_owned();
+        let second_path = second.to_string_lossy().into_owned();
+        fs::copy(&source, &first).unwrap();
+        files
+            .write_last(&[first_path, second_path.clone()])
+            .unwrap();
+
+        let core = FontCore::new(root.clone()).unwrap();
+        let partial = core.restore_last_session_with_progress(|_| {});
+        assert_eq!(partial.changed.len(), 1);
+        assert_eq!(partial.errors[0].code, "file_missing");
+        assert_eq!(partial.snapshot.restore_candidates, [second_path.clone()]);
+        assert_eq!(files.read_last().unwrap(), [second_path.clone()]);
+
+        assert!(core.prepare_exit(false).exiting);
+        let core = FontCore::new(root.clone()).unwrap();
+        assert_eq!(core.snapshot().restore_candidates.len(), 2);
+        let partial = core.restore_last_session_with_progress(|_| {});
+        assert_eq!(partial.changed.len(), 1);
+        assert_eq!(partial.snapshot.restore_candidates, [second_path]);
+        fs::copy(source, second).unwrap();
+        let retried = core.restore_last_session_with_progress(|_| {});
+        assert!(retried.errors.is_empty());
+        assert_eq!(retried.changed.len(), 1);
+        assert!(retried.skipped.is_empty());
+        assert!(retried.snapshot.restore_candidates.is_empty());
+
+        let unloaded = core.unload_fonts_with_progress(
+            retried
+                .snapshot
+                .fonts
+                .into_iter()
+                .map(|font| font.canonical_path)
+                .collect(),
+            |_| {},
+        );
+        assert!(unloaded.errors.is_empty());
+        assert!(core.prepare_exit(false).exiting);
+        assert!(FontCore::new(root)
+            .unwrap()
+            .snapshot()
+            .restore_candidates
+            .is_empty());
     }
 
     #[test]
