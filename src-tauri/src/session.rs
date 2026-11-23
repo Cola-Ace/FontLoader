@@ -30,6 +30,15 @@ impl SessionFiles {
         read_paths(&self.active_path)
     }
 
+    pub fn archive_invalid_active(&self) -> io::Result<PathBuf> {
+        let archive = tempfile::Builder::new()
+            .prefix("active-session-invalid-")
+            .tempdir_in(self.active_path.parent().unwrap())?;
+        let file_name = "active-session.json";
+        fs::rename(&self.active_path, archive.path().join(file_name))?;
+        Ok(archive.keep().join(file_name))
+    }
+
     pub fn read_last(&self) -> io::Result<Vec<String>> {
         read_paths(&self.last_path)
     }
