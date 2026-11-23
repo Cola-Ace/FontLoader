@@ -1,11 +1,26 @@
+@font-face {
+  font-family: "FontLoader YaHei UI";
+  src: local("Microsoft YaHei UI");
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "FontLoader YaHei UI";
+  src: local("Microsoft YaHei UI Bold");
+  font-weight: 700;
+}
+
 :root {
   color: #202124;
   background: #f7f8fa;
   font-family:
     var(--interface-primary-font, "Segoe UI"),
-    var(--interface-fallback-fonts,) "Microsoft YaHei UI",
+    var(--interface-fallback-fonts,) "FontLoader YaHei UI",
+    "Microsoft YaHei UI",
     sans-serif;
+  font-size-adjust: cap-height from-font;
   font-synthesis: none;
+  line-height: 1.5;
   text-rendering: optimizeLegibility;
   --surface: #ffffff;
   --surface-muted: #f1f3f5;
@@ -81,7 +96,7 @@ textarea:focus-visible {
 
 .brand-block {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   min-width: 0;
 }
@@ -347,15 +362,17 @@ input[type="checkbox"]:disabled {
 }
 
 .font-row {
-  align-items: start;
+  grid-template-rows: auto auto;
+  row-gap: 6px;
   padding-top: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
 .font-row > input,
-.font-row > time {
-  margin-top: 5px;
+.font-row > time,
+.font-row > .row-action {
+  grid-row: 1;
 }
 
 .font-row:last-child {
@@ -367,6 +384,15 @@ input[type="checkbox"]:disabled {
 }
 
 .font-identity {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  grid-template-rows: subgrid;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.font-details {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -405,7 +431,7 @@ input[type="checkbox"]:disabled {
 
 .family-name-line {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   min-width: 0;
 }
@@ -414,13 +440,13 @@ input[type="checkbox"]:disabled {
   min-width: 0;
   font-size: 15px;
   font-weight: 600;
-  line-height: 1.5;
   overflow-wrap: anywhere;
   user-select: text;
   cursor: text;
 }
 
 .copy-family {
+  align-self: center;
   flex: 0 0 26px;
   width: 26px;
   height: 26px;

@@ -60,39 +60,41 @@ onUnmounted(() => window.clearTimeout(copyTimer));
         {{ families.length }} 个字体族 · {{ font.faces.length }} 个字体面
       </span>
     </div>
-    <ul class="family-list">
-      <li v-for="family in visibleFamilies" :key="family.name" class="family-row">
-        <div class="family-name-line">
-          <strong class="family-name">{{ family.name }}</strong>
-          <span class="family-styles">{{ family.styles.join(" · ") }}</span>
-          <button
-            class="icon-button copy-family"
-            :class="{ 'is-copied': copiedKey === family.name }"
-            type="button"
-            :disabled="copying"
-            :aria-label="`复制 family name：${family.name}`"
-            :title="copiedKey === family.name ? '已复制' : '复制 family name'"
-            @click="copyFamily(family.name)"
-          >
-            <Check v-if="copiedKey === family.name" :size="15" />
-            <Copy v-else :size="15" />
-          </button>
-        </div>
-      </li>
-    </ul>
-    <button
-      v-if="families.length > 2 && !searchTerm.trim()"
-      class="text-button collection-toggle"
-      type="button"
-      :aria-expanded="expanded"
-      @click="expanded = !expanded"
-    >
-      <ChevronUp v-if="expanded" :size="14" />
-      <ChevronDown v-else :size="14" />
-      {{ expanded ? "收起" : `展开其余 ${families.length - 2} 个字体族` }}
-    </button>
-    <span class="copy-feedback" :class="{ 'visually-hidden': !copyFailed }" role="status">
-      {{ copyMessage }}
-    </span>
+    <div class="font-details">
+      <ul class="family-list">
+        <li v-for="family in visibleFamilies" :key="family.name" class="family-row">
+          <div class="family-name-line">
+            <strong class="family-name">{{ family.name }}</strong>
+            <span class="family-styles">{{ family.styles.join(" · ") }}</span>
+            <button
+              class="icon-button copy-family"
+              :class="{ 'is-copied': copiedKey === family.name }"
+              type="button"
+              :disabled="copying"
+              :aria-label="`复制 family name：${family.name}`"
+              :title="copiedKey === family.name ? '已复制' : '复制 family name'"
+              @click="copyFamily(family.name)"
+            >
+              <Check v-if="copiedKey === family.name" :size="15" />
+              <Copy v-else :size="15" />
+            </button>
+          </div>
+        </li>
+      </ul>
+      <button
+        v-if="families.length > 2 && !searchTerm.trim()"
+        class="text-button collection-toggle"
+        type="button"
+        :aria-expanded="expanded"
+        @click="expanded = !expanded"
+      >
+        <ChevronUp v-if="expanded" :size="14" />
+        <ChevronDown v-else :size="14" />
+        {{ expanded ? "收起" : `展开其余 ${families.length - 2} 个字体族` }}
+      </button>
+      <span class="copy-feedback" :class="{ 'visually-hidden': !copyFailed }" role="status">
+        {{ copyMessage }}
+      </span>
+    </div>
   </div>
 </template>
