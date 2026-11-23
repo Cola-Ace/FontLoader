@@ -49,7 +49,7 @@ The release executable is written to Cargo's release target directory, normally 
 ## Usage
 
 1. Open FontLoader and choose or drag in one or more `.ttf`, `.otf`, or `.ttc` files.
-2. Review the loaded fonts in the list. Duplicate files are skipped. Copy any family name with the button beside its style label; the style is not copied. TTC collections group faces by family; expand the list to view the remaining families.
+2. Review the loaded fonts in the list. Duplicate files are skipped. Each family shows one name, preferring English when available. Copy it with the button beside the style label. You can also search by localized family names. TTC collections group faces by family. Expand the list to view the remaining families.
 3. Use search and selection controls to find fonts and unload them individually or in batches.
 4. Minimize the window to keep the app in the system tray. Open it again from the tray when needed.
 5. Click “加载上次字体” (Load previous fonts) in the header to load the fonts counted in the badge. Fonts that fail to load stay in the count so you can try again, even after restarting FontLoader. To discard all pending entries, click the eraser next to the restore button and confirm.

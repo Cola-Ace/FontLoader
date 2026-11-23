@@ -93,7 +93,7 @@ const indexedFonts = computed<IndexedFont[]>(() =>
       font.fileName,
       font.canonicalPath,
       font.format,
-      ...font.faces.flatMap(face => [face.family, face.style]),
+      ...font.faces.flatMap(face => [face.family, ...face.familyAliases, face.style]),
     ].map(value => value.toLocaleLowerCase()),
   })),
 );

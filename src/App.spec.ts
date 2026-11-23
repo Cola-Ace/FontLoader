@@ -31,7 +31,7 @@ const font = {
   canonicalPath: "C:\\Fonts\\Example.ttf",
   fileName: "Example.ttf",
   format: "TTF" as const,
-  faces: [{ family: "Example Sans", style: "Regular" }],
+  faces: [{ family: "Example Sans", familyAliases: [], style: "Regular" }],
   loadedAt: "2026-08-02T12:00:00Z",
 };
 
@@ -362,14 +362,14 @@ describe("App", () => {
       ...font,
       canonicalPath: "C:\\Fonts\\Zulu.ttf",
       fileName: "Zulu.ttf",
-      faces: [{ family: "Zulu Sans", style: "Regular" }],
+      faces: [{ family: "Zulu Sans", familyAliases: [], style: "Regular" }],
       loadedAt: "2026-08-01T12:00:00Z",
     };
     const newer = {
       ...font,
       canonicalPath: "C:\\Fonts\\Alpha.ttf",
       fileName: "Alpha.ttf",
-      faces: [{ family: "Alpha Sans", style: "Regular" }],
+      faces: [{ family: "Alpha Sans", familyAliases: [], style: "Regular" }],
       loadedAt: "2026-08-03T12:00:00Z",
     };
     mockInitial({ ...emptySnapshot(), fonts: [older, newer] });
@@ -411,7 +411,7 @@ describe("App", () => {
     restoredWrapper.unmount();
   });
 
-  it("reveals a matching TTC family and still unloads the entire file", async () => {
+  it("finds a collapsed TTC family by its alias and unloads the entire file", async () => {
     const collection = {
       ...font,
       canonicalPath: "C:\\Fonts\\Collection.ttc",
@@ -419,6 +419,7 @@ describe("App", () => {
       format: "TTC" as const,
       faces: ["Alpha", "Beta", "Gamma", "Hidden Family"].map(family => ({
         family,
+        familyAliases: family === "Hidden Family" ? ["Localized Name"] : [],
         style: "Regular",
       })),
     };
@@ -426,9 +427,11 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    await wrapper.get('input[type="search"]').setValue("Hidden Family");
+    expect(wrapper.findAll(".family-name").map(row => row.text())).not.toContain("Hidden Family");
+    await wrapper.get('input[type="search"]').setValue("localized name");
     expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
     expect(wrapper.findAll(".family-name").map(row => row.text())).toContain("Hidden Family");
+    expect(wrapper.text()).not.toContain("Localized Name");
     invoke.mockResolvedValue(batchCompletion({
       snapshot: { ...emptySnapshot(), fonts: [font] },
       changed: [collection.canonicalPath],

@@ -1,5 +1,6 @@
 use crate::models::{FontFace, FontFormat};
 use std::{fs, path::Path};
+use ttf_parser::PlatformId;
 
 pub struct ParsedFont {
     pub format: FontFormat,
@@ -35,14 +36,82 @@ pub fn parse_font(path: &Path) -> Result<ParsedFont, String> {
     for index in 0..face_count {
         let face = ttf_parser::Face::parse(&data, index)
             .map_err(|error| format!("无法解析字体面 {index}: {error:?}"))?;
-        let family = find_name(&face, ttf_parser::name_id::FAMILY)
+        let mut family_names: Vec<_> = face
+            .names()
+            .into_iter()
+            .filter(|name| name.name_id == ttf_parser::name_id::FAMILY)
+            .filter_map(|name| {
+                let priority = match (name.platform_id, name.language_id, name.encoding_id) {
+                    (PlatformId::Windows, 0x0409, _) => 0,
+                    (PlatformId::Windows, _, _)
+                        if name.language().primary_language() == "English" =>
+                    {
+                        1
+                    }
+                    (PlatformId::Macintosh, 0, 0) => 2,
+                    _ => 3,
+                };
+                let value = match (name.platform_id, name.encoding_id) {
+                    (PlatformId::Windows, 10) if name.name.len() % 2 == 0 => {
+                        let units: Vec<_> = name
+                            .name
+                            .chunks_exact(2)
+                            .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+                            .collect();
+                        String::from_utf16(&units).ok()
+                    }
+                    #[cfg(windows)]
+                    (PlatformId::Macintosh, 0) if name.language_id == 0 => {
+                        decode_mac_roman(name.name)
+                    }
+                    _ => name.to_string(),
+                }?;
+                (!value.trim().is_empty()).then_some((priority, value))
+            })
+            .collect();
+        family_names.sort_by_key(|(priority, _)| *priority);
+        let mut family_names = family_names.into_iter().map(|(_, name)| name);
+        let family = family_names
+            .next()
             .unwrap_or_else(|| fallback_family.clone());
+        let mut family_aliases = Vec::new();
+        for name in family_names {
+            if name != family && !family_aliases.contains(&name) {
+                family_aliases.push(name);
+            }
+        }
         let style =
             find_name(&face, ttf_parser::name_id::SUBFAMILY).unwrap_or_else(|| "常规".to_string());
-        faces.push(FontFace { family, style });
+        faces.push(FontFace {
+            family,
+            family_aliases,
+            style,
+        });
     }
 
     Ok(ParsedFont { format, faces })
+}
+
+#[cfg(windows)]
+fn decode_mac_roman(bytes: &[u8]) -> Option<String> {
+    use windows_sys::Win32::Globalization::MultiByteToWideChar;
+
+    const MAC_ROMAN_CODE_PAGE: u32 = 10000;
+    let mut decoded = vec![0; bytes.len()];
+    let written = unsafe {
+        MultiByteToWideChar(
+            MAC_ROMAN_CODE_PAGE,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            decoded.as_mut_ptr(),
+            decoded.len() as i32,
+        )
+    };
+    if written == 0 {
+        return None;
+    }
+    String::from_utf16(&decoded[..written as usize]).ok()
 }
 
 fn find_name(face: &ttf_parser::Face<'_>, name_id: u16) -> Option<String> {

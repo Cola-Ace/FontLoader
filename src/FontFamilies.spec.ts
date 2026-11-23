@@ -8,12 +8,12 @@ const font: FontEntry = {
   fileName: "Collection.ttc",
   format: "TTC",
   faces: [
-    { family: "Example Sans", style: "Regular" },
-    { family: "Example Sans", style: "Bold" },
-    { family: "Example Sans", style: "Bold" },
-    { family: "思源黑体", style: "Regular" },
-    { family: "Example Serif", style: "Light" },
-    { family: "Example Mono", style: "Regular" },
+    { family: "Example Sans", familyAliases: [], style: "Regular" },
+    { family: "Example Sans", familyAliases: [], style: "Bold" },
+    { family: "Example Sans", familyAliases: [], style: "Bold" },
+    { family: "思源黑体", familyAliases: [], style: "Regular" },
+    { family: "Example Serif", familyAliases: [], style: "Light" },
+    { family: "Example Mono", familyAliases: [], style: "Regular" },
   ],
   loadedAt: "2026-08-02T12:00:00Z",
 };
@@ -102,14 +102,24 @@ describe("FontFamilies", () => {
     wrapper.unmount();
   });
 
-  it("copies only the exact family name and clears success feedback", async () => {
+  it("shows and copies a single name even when localized names are available", async () => {
     vi.useFakeTimers();
-    const wrapper = mount(FontFamilies, { props: { font, searchTerm: "" } });
+    const faces = [
+      { family: "DFShuaShuaW7-B5", familyAliases: ["華康刷刷體W7"], style: "Regular" },
+      { family: "DFShuaShuaW7-B5", familyAliases: ["華康刷刷體W7"], style: "Bold" },
+    ];
+    const wrapper = mount(FontFamilies, {
+      props: { font: { ...font, faces }, searchTerm: "" },
+    });
 
-    await wrapper.get('button[aria-label="复制 family name：思源黑体"]').trigger("click");
+    expect(wrapper.get(".collection-count").text()).toBe("1 个字体族 · 2 个字体面");
+    expect(wrapper.get(".family-name").text()).toBe("DFShuaShuaW7-B5");
+    expect(wrapper.text()).not.toContain("華康刷刷體W7");
+    expect(wrapper.findAll(".copy-family")).toHaveLength(1);
+    await wrapper.get('button[aria-label="复制 family name：DFShuaShuaW7-B5"]').trigger("click");
     await flushPromises();
-    expect(writeText).toHaveBeenCalledWith("思源黑体");
-    expect(wrapper.get('[role="status"]').text()).toBe("已复制：思源黑体");
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("DFShuaShuaW7-B5");
+    expect(wrapper.get('[role="status"]').text()).toBe("已复制：DFShuaShuaW7-B5");
     expect(wrapper.findAll(".is-copied")).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(2000);
     expect(wrapper.findAll(".is-copied")).toHaveLength(0);

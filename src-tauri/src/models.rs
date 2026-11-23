@@ -12,6 +12,7 @@ pub enum FontFormat {
 #[serde(rename_all = "camelCase")]
 pub struct FontFace {
     pub family: String,
+    pub family_aliases: Vec<String>,
     pub style: String,
 }
 

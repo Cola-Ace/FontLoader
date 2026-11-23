@@ -2,6 +2,7 @@ export type FontFormat = "TTF" | "OTF" | "TTC";
 
 export interface FontFace {
   family: string;
+  familyAliases: string[];
   style: string;
 }
 
