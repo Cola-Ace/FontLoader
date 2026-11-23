@@ -93,25 +93,17 @@ pub fn unregister_font(_path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 pub fn broadcast_font_change() -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_FONTCHANGE,
+        SendNotifyMessageW, HWND_BROADCAST, WM_FONTCHANGE,
     };
 
-    let mut result = 0usize;
-    let sent = unsafe {
-        SendMessageTimeoutW(
-            HWND_BROADCAST,
-            WM_FONTCHANGE,
-            0,
-            0,
-            SMTO_ABORTIFHUNG,
-            1_000,
-            &mut result,
-        )
-    };
+    let sent = unsafe { SendNotifyMessageW(HWND_BROADCAST, WM_FONTCHANGE, 0, 0) };
     if sent != 0 {
         Ok(())
     } else {
-        Err("WM_FONTCHANGE 广播超时".to_string())
+        Err(format!(
+            "WM_FONTCHANGE 广播失败：{}",
+            std::io::Error::last_os_error()
+        ))
     }
 }
 

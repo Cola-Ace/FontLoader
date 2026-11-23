@@ -34,14 +34,22 @@ export interface BatchResult {
 }
 
 export interface BatchCompletion {
+  id: number;
   operation: "load" | "unload";
   result: BatchResult;
 }
 
 export interface BatchProgress {
+  id: number;
   operation: "load" | "unload";
   completed: number;
   total: number;
+}
+
+export interface InitialState {
+  snapshot: AppSnapshot;
+  progress: BatchProgress | null;
+  completion: BatchCompletion | null;
 }
 
 export interface ExitResult {

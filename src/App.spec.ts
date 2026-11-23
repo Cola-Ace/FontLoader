@@ -7,6 +7,7 @@ import type {
   BatchCompletion,
   BatchProgress,
   BatchResult,
+  InitialState,
 } from "./types";
 
 const { confirm, invoke, listen, open } = vi.hoisted(() => ({
@@ -34,10 +35,19 @@ const font = {
   loadedAt: "2026-08-02T12:00:00Z",
 };
 
+const initialState = (snapshot: AppSnapshot, progress: BatchProgress | null = null): InitialState =>
+  ({ snapshot, progress, completion: null });
+
+const batchCompletion = (
+  result: BatchResult,
+  operation: BatchCompletion["operation"] = "load",
+  id = 1,
+): BatchCompletion => ({ id, operation, result });
+
 function mockInitial(snapshot: AppSnapshot) {
   invoke.mockImplementation((command: string) => {
     if (command === "get_initial_state") {
-      return Promise.resolve(snapshot);
+      return Promise.resolve(initialState(snapshot));
     }
     return Promise.resolve(undefined);
   });
@@ -75,8 +85,8 @@ describe("App", () => {
   });
 
   it("makes the window ready before waiting for the initial state", async () => {
-    let resolveInitial!: (snapshot: AppSnapshot) => void;
-    const pendingInitial = new Promise<AppSnapshot>(resolve => {
+    let resolveInitial!: (state: InitialState) => void;
+    const pendingInitial = new Promise<InitialState>(resolve => {
       resolveInitial = resolve;
     });
     invoke.mockImplementation((command: string) => {
@@ -91,26 +101,28 @@ describe("App", () => {
 
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       "window_ready",
-      "get_batch_progress",
       "get_initial_state",
     ]);
 
-    resolveInitial(emptySnapshot());
+    expect(wrapper.get(".button-primary").attributes("disabled")).toBeDefined();
+    resolveInitial(initialState(emptySnapshot()));
     await flushPromises();
     wrapper.unmount();
   });
 
   it("restores in-flight progress and completion after reopening", async () => {
+    let progressHandler!: (event: { payload: BatchProgress }) => void;
     let completionHandler!: (event: { payload: BatchCompletion }) => void;
     listen.mockImplementation(async (event, handler) => {
       if (event === "font-batch-progress") {
-        return () => {};
-      } else {
+        progressHandler = handler as (event: { payload: BatchProgress }) => void;
+      } else if (event === "font-batch-complete") {
         completionHandler = handler as (event: { payload: BatchCompletion }) => void;
       }
       return () => {};
     });
     const completion: BatchCompletion = {
+      id: 1,
       operation: "load",
       result: {
         snapshot: {
@@ -123,15 +135,13 @@ describe("App", () => {
         errors: [],
       },
     };
+    const finalProgress = { id: 1, operation: "load", completed: 2, total: 2 } as const;
     invoke.mockImplementation((command: string) => {
-      if (command === "get_batch_progress") {
-        return Promise.resolve({ operation: "load", completed: 1, total: 2 });
-      }
       if (command === "get_initial_state") {
-        return Promise.resolve({ ...emptySnapshot(), fonts: [font] });
-      }
-      if (command === "take_pending_batch_completion") {
-        return Promise.resolve(null);
+        return Promise.resolve(initialState(
+          { ...emptySnapshot(), fonts: [font] },
+          { ...finalProgress, completed: 1 },
+        ));
       }
       return Promise.resolve(undefined);
     });
@@ -141,12 +151,59 @@ describe("App", () => {
 
     expect(wrapper.text()).toContain("1/2");
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
+    progressHandler({ payload: finalProgress });
+    await flushPromises();
+    expect(wrapper.text()).toContain("2/2");
+    expect(wrapper.text()).toContain("正在完成加载");
+    expect(wrapper.get(".button-primary").attributes("disabled")).toBeDefined();
+
     completionHandler({ payload: completion });
+    progressHandler({ payload: finalProgress });
     await flushPromises();
     expect(wrapper.text()).toContain("加载成功 1 个");
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
     expect(wrapper.get(".history-count").text()).toBe("1");
     expect(wrapper.find(".operation-status").exists()).toBe(true);
+    expect(wrapper.get(".button-primary").attributes("disabled")).toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("acknowledge_batch_completion", { id: 1 });
+    wrapper.unmount();
+  });
+
+  it("keeps the completion when an older initial response arrives later", async () => {
+    let completionHandler!: (event: { payload: BatchCompletion }) => void;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "font-batch-complete") {
+        completionHandler = handler as (event: { payload: BatchCompletion }) => void;
+      }
+      return () => {};
+    });
+    let resolveInitial!: (state: InitialState) => void;
+    const pendingInitial = new Promise<InitialState>(resolve => {
+      resolveInitial = resolve;
+    });
+    invoke.mockImplementation((command: string) =>
+      command === "get_initial_state" ? pendingInitial : Promise.resolve(undefined),
+    );
+    const wrapper = mount(App);
+    await flushPromises();
+
+    completionHandler({ payload: batchCompletion({
+      snapshot: { ...emptySnapshot(), fonts: [font] },
+      changed: [font.canonicalPath],
+      skipped: [],
+      errors: [],
+    }) });
+    resolveInitial(initialState(emptySnapshot(), {
+      id: 1,
+      operation: "load",
+      completed: 1,
+      total: 1,
+    }));
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("加载成功 1 个");
+    expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
+    expect(wrapper.get(".button-primary").attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
 
@@ -207,13 +264,13 @@ describe("App", () => {
       format: "OTF" as const,
     };
     const paths = [font.canonicalPath, other.canonicalPath];
-    let resolveBatch!: (result: BatchResult) => void;
-    const pendingBatch = new Promise<BatchResult>(resolve => {
+    let resolveBatch!: (result: BatchCompletion) => void;
+    const pendingBatch = new Promise<BatchCompletion>(resolve => {
       resolveBatch = resolve;
     });
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve({ ...emptySnapshot(), restoreCandidates: paths });
+        return Promise.resolve(initialState({ ...emptySnapshot(), restoreCandidates: paths }));
       }
       if (command === "restore_last_session") {
         return pendingBatch;
@@ -231,12 +288,12 @@ describe("App", () => {
     expect(wrapper.get('[data-testid="load-last-fonts"]').attributes("disabled")).toBeDefined();
     expect(open).not.toHaveBeenCalled();
 
-    resolveBatch({
+    resolveBatch(batchCompletion({
       snapshot: { ...emptySnapshot(), fonts: [font, other] },
       changed: paths,
       skipped: [],
       errors: [],
-    });
+    }));
     await flushPromises();
 
     expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(2);
@@ -252,24 +309,24 @@ describe("App", () => {
     const restoredFont = { ...font, canonicalPath: missingPath, fileName: "Missing.ttf" };
     const restore = vi
       .fn()
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(batchCompletion({
         snapshot: { ...emptySnapshot(), fonts: [font], restoreCandidates: [missingPath] },
         changed: [font.canonicalPath],
         skipped: [],
         errors: [{ path: missingPath, code: "file_missing", message: "文件不存在" }],
-      } satisfies BatchResult)
-      .mockResolvedValueOnce({
+      }))
+      .mockResolvedValueOnce(batchCompletion({
         snapshot: { ...emptySnapshot(), fonts: [font, restoredFont] },
         changed: [missingPath],
         skipped: [],
         errors: [],
-      } satisfies BatchResult);
+      }, "load", 2));
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve({
+        return Promise.resolve(initialState({
           ...emptySnapshot(),
           restoreCandidates: [font.canonicalPath, missingPath],
-        });
+        }));
       }
       if (command === "restore_last_session") {
         return restore();
@@ -369,12 +426,12 @@ describe("App", () => {
     await wrapper.get('input[type="search"]').setValue("Hidden Family");
     expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
     expect(wrapper.findAll(".family-name").map(row => row.text())).toContain("Hidden Family");
-    invoke.mockResolvedValue({
+    invoke.mockResolvedValue(batchCompletion({
       snapshot: { ...emptySnapshot(), fonts: [font] },
       changed: [collection.canonicalPath],
       skipped: [],
       errors: [],
-    });
+    }, "unload"));
     await wrapper.get('button[aria-label="卸载 Collection.ttc"]').trigger("click");
     await flushPromises();
 
@@ -396,10 +453,10 @@ describe("App", () => {
     };
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve(emptySnapshot());
+        return Promise.resolve(initialState(emptySnapshot()));
       }
       if (command === "load_fonts") {
-        return Promise.resolve(result);
+        return Promise.resolve(batchCompletion(result));
       }
       return Promise.resolve(undefined);
     });
@@ -435,10 +492,10 @@ describe("App", () => {
     };
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve(emptySnapshot());
+        return Promise.resolve(initialState(emptySnapshot()));
       }
       if (command === "load_fonts") {
-        return Promise.resolve(result);
+        return Promise.resolve(batchCompletion(result));
       }
       return Promise.resolve(undefined);
     });
@@ -476,13 +533,13 @@ describe("App", () => {
       return () => {};
     });
     open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
-    let resolveBatch!: (result: BatchResult) => void;
-    const pendingBatch = new Promise<BatchResult>(resolve => {
+    let resolveBatch!: (result: BatchCompletion) => void;
+    const pendingBatch = new Promise<BatchCompletion>(resolve => {
       resolveBatch = resolve;
     });
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve(emptySnapshot());
+        return Promise.resolve(initialState(emptySnapshot()));
       }
       if (command === "load_fonts") {
         return pendingBatch;
@@ -506,12 +563,12 @@ describe("App", () => {
     expect(wrapper.get(".operation-status").text()).toContain("正在加载字体");
     expect(wrapper.get(".drop-notice").text()).toContain("当前正在处理字体");
 
-    resolveBatch({
+    resolveBatch(batchCompletion({
       snapshot: { ...emptySnapshot(), fonts: [font] },
       changed: [font.canonicalPath],
       skipped: [],
       errors: [],
-    });
+    }));
     await flushPromises();
     wrapper.unmount();
   });
@@ -524,15 +581,15 @@ describe("App", () => {
     open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve(initialSnapshot);
+        return Promise.resolve(initialState(initialSnapshot));
       }
       if (command === "load_fonts") {
-        return Promise.resolve({
+        return Promise.resolve(batchCompletion({
           snapshot: { ...initialSnapshot, fonts: [font] },
           changed: [font.canonicalPath],
           skipped: [],
           errors: [],
-        } satisfies BatchResult);
+        }));
       }
       return Promise.resolve(undefined);
     });
@@ -556,7 +613,7 @@ describe("App", () => {
     confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve(initialSnapshot);
+        return Promise.resolve(initialState(initialSnapshot));
       }
       if (command === "dismiss_last_session") {
         return Promise.resolve(emptySnapshot());
@@ -583,8 +640,8 @@ describe("App", () => {
   it("shows progress while loading files", async () => {
     mockInitial(emptySnapshot());
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);
-    let resolveBatch!: (result: BatchResult) => void;
-    const pendingBatch = new Promise<BatchResult>(resolve => {
+    let resolveBatch!: (result: BatchCompletion) => void;
+    const pendingBatch = new Promise<BatchCompletion>(resolve => {
       resolveBatch = resolve;
     });
     let progressHandler!: (event: { payload: BatchProgress }) => void;
@@ -596,7 +653,7 @@ describe("App", () => {
     });
     invoke.mockImplementation((command: string) => {
       if (command === "get_initial_state") {
-        return Promise.resolve(emptySnapshot());
+        return Promise.resolve(initialState(emptySnapshot()));
       }
       if (command === "load_fonts") {
         return pendingBatch;
@@ -613,16 +670,20 @@ describe("App", () => {
 
     expect(wrapper.get(".operation-status").classes()).not.toContain("is-warning");
     expect(wrapper.text()).toContain("0/2");
-    progressHandler({ payload: { operation: "load", completed: 1, total: 2 } });
+    progressHandler({ payload: { id: 1, operation: "load", completed: 1, total: 2 } });
     await flushPromises();
     expect(wrapper.text()).toContain("1/2");
+    progressHandler({ payload: { id: 1, operation: "load", completed: 2, total: 2 } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在完成加载");
+    expect(wrapper.get(".button-primary").attributes("disabled")).toBeDefined();
 
-    resolveBatch({
+    resolveBatch(batchCompletion({
       snapshot: { ...emptySnapshot(), fonts: [font] },
       changed: [font.canonicalPath],
       skipped: [],
       errors: [],
-    });
+    }));
     await flushPromises();
     expect(wrapper.text()).toContain("加载成功 1 个");
     expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(true);
@@ -635,7 +696,7 @@ describe("App", () => {
       open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
       invoke.mockImplementation((command: string) => {
         if (command === "get_initial_state") {
-          return Promise.resolve(emptySnapshot());
+          return Promise.resolve(initialState(emptySnapshot()));
         }
         if (command === "load_fonts") {
           return Promise.reject(new Error("加载失败"));
@@ -664,12 +725,12 @@ describe("App", () => {
     await flushPromises();
 
     await wrapper.get(`input[aria-label="选择 ${font.fileName}"]`).setValue(true);
-    invoke.mockResolvedValue({
+    invoke.mockResolvedValue(batchCompletion({
       snapshot: emptySnapshot(),
       changed: [font.canonicalPath],
       skipped: [],
       errors: [],
-    });
+    }, "unload"));
     await wrapper.get(".button-danger-quiet").trigger("click");
     await flushPromises();
 

@@ -55,6 +55,7 @@ pub struct BatchResult {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchCompletion {
+    pub id: u64,
     pub operation: String,
     pub result: BatchResult,
 }
@@ -62,9 +63,18 @@ pub struct BatchCompletion {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchProgress {
+    pub id: u64,
     pub operation: String,
     pub completed: usize,
     pub total: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialState {
+    pub snapshot: AppSnapshot,
+    pub progress: Option<BatchProgress>,
+    pub completion: Option<BatchCompletion>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

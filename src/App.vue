@@ -25,6 +25,7 @@ import type {
   BatchResult,
   ExitResult,
   FontEntry,
+  InitialState,
   OperationError,
 } from "./types";
 
@@ -38,10 +39,13 @@ const snapshot = ref<AppSnapshot>(emptySnapshot());
 const selectedPaths = ref<Set<string>>(new Set());
 const searchTerm = ref("");
 const busy = ref(false);
+const initializing = ref(false);
+const actionsBlocked = computed(() => initializing.value || busy.value);
 const operationErrors = ref<OperationError[]>([]);
 const statusMessage = ref("");
 const statusWarning = ref(false);
-const operationProgress = ref<BatchProgress | null>(null);
+type OperationProgress = Omit<BatchProgress, "id"> & { id?: number };
+const operationProgress = ref<OperationProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
 const exitSessionSaveFailed = computed(() =>
   exitErrors.value.some(error => error.code === "session_log_failed"),
@@ -65,6 +69,7 @@ let stopDragDropListener: (() => void) | undefined;
 let statusDismissTimer: number | undefined;
 let dropNoticeTimer: number | undefined;
 let batchInvocationActive = false;
+let completedBatchId = 0;
 
 watch(sortMode, nextSortMode => {
   localStorage.setItem("font-loader-sort", nextSortMode);
@@ -240,34 +245,47 @@ function totalFor(
   return Array.isArray(args.paths) ? args.paths.length : 0;
 }
 
-function applyBatchProgress(nextProgress: BatchProgress) {
+function applyBatchProgress(nextProgress: OperationProgress) {
+  const current = operationProgress.value;
+  if (
+    nextProgress.id !== undefined &&
+    (nextProgress.id <= completedBatchId ||
+      (current?.id !== undefined &&
+        (nextProgress.id < current.id ||
+          (nextProgress.id === current.id && nextProgress.completed < current.completed))))
+  ) {
+    return;
+  }
   statusWarning.value = false;
   busy.value = true;
   clearStatusTimer();
   operationErrors.value = [];
   operationProgress.value = nextProgress;
-  statusMessage.value =
-    nextProgress.operation === "unload" ? "正在卸载字体..." : "正在加载字体...";
-}
-
-function clearRecoveredProgress() {
-  clearStatusTimer();
-  busy.value = false;
-  operationProgress.value = null;
-  operationErrors.value = [];
-  statusMessage.value = "";
+  const action = nextProgress.operation === "unload" ? "卸载" : "加载";
+  statusMessage.value = nextProgress.completed >= nextProgress.total
+    ? `正在完成${action}...`
+    : `正在${action}字体...`;
 }
 
 function applyBatchCompletion(completion: BatchCompletion) {
-  clearRecoveredProgress();
+  if (completion.id <= completedBatchId || completion.id < (operationProgress.value?.id ?? 0)) {
+    return;
+  }
+  completedBatchId = completion.id;
+  busy.value = false;
+  operationProgress.value = null;
   applySnapshot(completion.result.snapshot);
   summarizeResult(completion.result, completion.operation === "unload" ? "卸载" : "加载");
+  void invoke("acknowledge_batch_completion", { id: completion.id }).catch(() => {});
 }
 
 async function runBatch(
   command: "load_fonts" | "unload_fonts" | "restore_last_session",
   args: Record<string, unknown> = {},
 ) {
+  if (actionsBlocked.value) {
+    return;
+  }
   batchInvocationActive = true;
   applyBatchProgress({
     operation: operationFor(command),
@@ -275,10 +293,7 @@ async function runBatch(
     total: totalFor(command, args),
   });
   try {
-    const result = await invoke<BatchResult>(command, args);
-    applySnapshot(result.snapshot);
-    summarizeResult(result, command === "unload_fonts" ? "卸载" : "加载");
-    void invoke("take_pending_batch_completion").catch(() => {});
+    applyBatchCompletion(await invoke<BatchCompletion>(command, args));
   } catch (error) {
     const action = command === "unload_fonts" ? "卸载" : "加载";
     statusMessage.value = `${action}失败`;
@@ -333,7 +348,7 @@ function handleDragLeave() {
 
 async function handleDragDrop(payload: DragDropPayload) {
   dragActive.value = false;
-  if (busy.value) {
+  if (actionsBlocked.value) {
     showDropNotice("当前正在处理字体，暂时无法导入，请稍后再试");
     return;
   }
@@ -434,6 +449,7 @@ onMounted(async () => {
   if (!("__TAURI_INTERNALS__" in window) && import.meta.env.MODE !== "test") {
     return;
   }
+  initializing.value = true;
   try {
     stopProgressListener = await listen<BatchProgress>("font-batch-progress", event => {
       if (
@@ -443,12 +459,6 @@ onMounted(async () => {
         return;
       }
       applyBatchProgress(event.payload);
-      if (
-        event.payload.completed >= event.payload.total &&
-        !batchInvocationActive
-      ) {
-        clearRecoveredProgress();
-      }
     });
     stopDragEnterListener = await listen("tauri://drag-enter", handleDragEnter);
     stopDragOverListener = await listen("tauri://drag-over", handleDragOver);
@@ -461,19 +471,17 @@ onMounted(async () => {
         return;
       }
       applyBatchCompletion(event.payload);
-      void invoke("take_pending_batch_completion").catch(() => {});
     });
     await invoke("window_ready");
-    const initialProgress = await invoke<BatchProgress | null>("get_batch_progress");
-    if (initialProgress) {
-      applyBatchProgress(initialProgress);
+    const initial = await invoke<InitialState>("get_initial_state");
+    if (!completedBatchId) {
+      applySnapshot(initial.snapshot);
     }
-    applySnapshot(await invoke<AppSnapshot>("get_initial_state"));
-    const pendingCompletion = await invoke<BatchCompletion | null>(
-      "take_pending_batch_completion",
-    );
-    if (pendingCompletion) {
-      applyBatchCompletion(pendingCompletion);
+    if (initial.progress) {
+      applyBatchProgress(initial.progress);
+    }
+    if (initial.completion) {
+      applyBatchCompletion(initial.completion);
     }
   } catch (error) {
     operationErrors.value = [
@@ -483,6 +491,8 @@ onMounted(async () => {
         message: String(error),
       },
     ];
+  } finally {
+    initializing.value = false;
   }
 });
 
@@ -500,14 +510,14 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
-    <div v-if="dragActive" class="drop-overlay" :class="{ 'is-blocked': busy }">
+    <div v-if="dragActive" class="drop-overlay" :class="{ 'is-blocked': actionsBlocked }">
       <section class="drop-guide" role="status" aria-live="polite">
-        <AlertTriangle v-if="busy" :size="30" />
+        <AlertTriangle v-if="actionsBlocked" :size="30" />
         <FilePlus2 v-else :size="30" />
-        <strong>{{ busy ? "暂时无法导入字体" : "拖放字体文件以导入" }}</strong>
+        <strong>{{ actionsBlocked ? "暂时无法导入字体" : "拖放字体文件以导入" }}</strong>
         <span>
           {{
-            busy
+            actionsBlocked
               ? "正在加载或卸载字体，请完成当前操作后再试"
               : "松开鼠标即可加载 TTF、OTF 或 TTC 文件"
           }}
@@ -558,7 +568,7 @@ onUnmounted(() => {
         <button
           class="button button-secondary"
           type="button"
-          :disabled="busy"
+          :disabled="actionsBlocked"
           data-testid="load-last-fonts"
           :aria-label="`加载上次字体，${snapshot.restoreCandidates.length} 个字体可恢复`"
           :title="snapshot.restoreCandidates.length ? `恢复上次会话的 ${snapshot.restoreCandidates.length} 个字体` : '暂无上次加载记录'"
@@ -577,7 +587,7 @@ onUnmounted(() => {
           v-if="snapshot.restoreCandidates.length"
           class="icon-button"
           type="button"
-          :disabled="busy"
+          :disabled="actionsBlocked"
           aria-label="清除待恢复记录"
           title="清除待恢复记录"
           @click="dismissRestoreHistory"
@@ -585,7 +595,7 @@ onUnmounted(() => {
           <Eraser :size="16" aria-hidden="true" />
         </button>
 
-        <button class="button button-primary" type="button" :disabled="busy" @click="chooseFonts">
+        <button class="button button-primary" type="button" :disabled="actionsBlocked" @click="chooseFonts">
           <FilePlus2 :size="17" />
           选择字体
         </button>
@@ -623,7 +633,7 @@ onUnmounted(() => {
         <button
           class="button button-danger-quiet"
           type="button"
-          :disabled="busy || selectedPaths.size === 0"
+          :disabled="actionsBlocked || selectedPaths.size === 0"
           @click="unloadSelected"
         >
           <Trash2 :size="16" />
@@ -660,7 +670,7 @@ onUnmounted(() => {
           <button
             class="icon-button row-action"
             type="button"
-            :disabled="busy"
+            :disabled="actionsBlocked"
             :aria-label="`卸载 ${font.fileName}`"
             :title="`卸载 ${font.fileName}`"
             @click="unloadOne(font.canonicalPath)"
@@ -723,10 +733,10 @@ onUnmounted(() => {
             </li>
           </ul>
           <div class="dialog-actions">
-            <button class="button button-secondary" type="button" :disabled="busy" @click="retryExit(true)">
+            <button class="button button-secondary" type="button" :disabled="actionsBlocked" @click="retryExit(true)">
               仍然退出
             </button>
-            <button class="button button-primary" type="button" :disabled="busy" @click="retryExit(false)">
+            <button class="button button-primary" type="button" :disabled="actionsBlocked" @click="retryExit(false)">
               <RotateCcw :size="16" />
               {{ exitSessionSaveFailed ? "重试退出" : "重试卸载" }}
             </button>

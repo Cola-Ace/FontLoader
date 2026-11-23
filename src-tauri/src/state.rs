@@ -76,9 +76,7 @@ impl FontCore {
         } else {
             session.write_active(&[])
         };
-        if cleaned_any {
-            let _ = broadcast_font_change();
-        }
+        notify_font_changes(cleaned_any);
         saved?;
 
         Ok(Self {
@@ -101,7 +99,10 @@ impl FontCore {
         F: FnMut(usize),
     {
         let mut data = self.data.lock().unwrap();
-        self.load_fonts(&mut data, paths, progress)
+        let result = self.load_fonts(&mut data, paths, progress);
+        drop(data);
+        notify_font_changes(!result.changed.is_empty());
+        result
     }
 
     fn load_fonts<F>(&self, data: &mut CoreData, paths: Vec<String>, mut progress: F) -> BatchResult
@@ -198,9 +199,6 @@ impl FontCore {
                 .errors
                 .push(operation_error("", "session_log_failed", error.to_string()));
         }
-        if !result.changed.is_empty() {
-            let _ = broadcast_font_change();
-        }
         result.snapshot = snapshot_from(data);
         result
     }
@@ -210,7 +208,10 @@ impl FontCore {
         F: FnMut(usize),
     {
         let mut data = self.data.lock().unwrap();
-        self.unload_fonts(&mut data, paths, progress)
+        let result = self.unload_fonts(&mut data, paths, progress);
+        drop(data);
+        notify_font_changes(!result.changed.is_empty());
+        result
     }
 
     fn unload_fonts<F>(
@@ -254,7 +255,6 @@ impl FontCore {
                     .errors
                     .push(operation_error("", "session_log_failed", error.to_string()));
             }
-            let _ = broadcast_font_change();
         }
         result.snapshot = snapshot_from(data);
         result
@@ -266,7 +266,10 @@ impl FontCore {
     {
         let mut data = self.data.lock().unwrap();
         let paths = data.restore_candidates.clone();
-        self.load_fonts(&mut data, paths, progress)
+        let result = self.load_fonts(&mut data, paths, progress);
+        drop(data);
+        notify_font_changes(!result.changed.is_empty());
+        result
     }
 
     pub fn dismiss_last_session(&self) -> io::Result<AppSnapshot> {
@@ -309,9 +312,10 @@ impl FontCore {
             }
         }
         let batch = self.unload_fonts(&mut data, paths, progress);
+        let fonts_changed = !batch.changed.is_empty();
         errors.extend(batch.errors);
 
-        if errors.is_empty() || force {
+        let result = if errors.is_empty() || force {
             data.exit_errors.clear();
             ExitResult {
                 exiting: true,
@@ -334,7 +338,10 @@ impl FontCore {
                 exiting: false,
                 errors,
             }
-        }
+        };
+        drop(data);
+        notify_font_changes(fonts_changed);
+        result
     }
 
     fn write_active(&self, data: &CoreData) -> io::Result<()> {
@@ -344,6 +351,12 @@ impl FontCore {
             .map(|entry| entry.canonical_path.clone())
             .collect::<Vec<_>>();
         self.session.write_active(&paths)
+    }
+}
+
+fn notify_font_changes(fonts_changed: bool) {
+    if fonts_changed {
+        let _ = broadcast_font_change();
     }
 }
 
