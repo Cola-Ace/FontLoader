@@ -10,6 +10,7 @@
 - Import and unload fonts in batches, or search, select, and manage them individually.
 - Load fonts for the current Windows session without copying them to the system font directory or installing them permanently.
 - Restore fonts from the previous session and unload managed fonts automatically before exit.
+- Customize the interface with a primary font and an ordered list of fallback fonts.
 
 FontLoader loads `.ttf`, `.otf`, and `.ttc` files through the Windows session-level font API. Fonts become available to other applications during the current session without being copied to the system font directory or installed permanently.
 
@@ -50,10 +51,10 @@ The release executable is written to Cargo's release target directory, normally 
 
 1. Open FontLoader and choose or drag in one or more `.ttf`, `.otf`, or `.ttc` files.
 2. Review the loaded fonts in the list. Duplicate files are skipped. Each family shows one name, preferring English when available. Copy it with the button beside the style label. You can also search by localized family names. TTC collections group faces by family. Expand the list to view the remaining families.
-3. Use search and selection controls to find fonts and unload them individually or in batches.
+3. Use search and selection controls to find fonts and unload them individually or in batches. Batch operations show progress and a summary, with details for any failures.
 4. Minimize the window to keep the app in the system tray. Open it again from the tray when needed.
 5. Click “加载上次字体” (Load previous fonts) in the header to load the fonts counted in the badge. Fonts that fail to load stay in the count so you can try again, even after restarting FontLoader. To discard all pending entries, click the eraser next to the restore button and confirm.
-6. Click “界面字体设置” (Interface font settings) in the header and enter the primary font family name. Enter one fallback family per line in priority order, then click “保存” (Save).
+6. Click “界面字体设置” (Interface font settings) in the header. For local fonts, enter a family name, full font name, or PostScript name. List fallback fonts one per line in priority order. Click “保存” (Save) to apply your choices immediately and keep them for the next launch. To return to the default fonts, click “恢复默认” (Restore defaults), then “保存” (Save).
 
 Font registration is temporary: FontLoader does not copy font files, modify the registry, or provide permanent font installation. A restart of Windows removes the session-level registrations.
 

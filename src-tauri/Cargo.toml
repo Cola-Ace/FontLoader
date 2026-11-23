@@ -1,6 +1,6 @@
 [package]
 name = "font-loader"
-version = "0.1.6"
+version = "0.2.0"
 description = "Windows temporary font loader"
 authors = ["FontLoader contributors"]
 edition = "2021"
