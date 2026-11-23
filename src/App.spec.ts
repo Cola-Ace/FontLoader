@@ -112,12 +112,12 @@ describe("App", () => {
 
   it("restores in-flight progress and completion after reopening", async () => {
     let progressHandler!: (event: { payload: BatchProgress }) => void;
-    let completionHandler!: (event: { payload: BatchCompletion }) => void;
+    let completionHandler!: (event: { payload: number }) => Promise<void>;
     listen.mockImplementation(async (event, handler) => {
       if (event === "font-batch-progress") {
         progressHandler = handler as (event: { payload: BatchProgress }) => void;
       } else if (event === "font-batch-complete") {
-        completionHandler = handler as (event: { payload: BatchCompletion }) => void;
+        completionHandler = handler as typeof completionHandler;
       }
       return () => {};
     });
@@ -143,6 +143,9 @@ describe("App", () => {
           { ...finalProgress, completed: 1 },
         ));
       }
+      if (command === "get_batch_completion") {
+        return Promise.resolve(completion);
+      }
       return Promise.resolve(undefined);
     });
 
@@ -157,7 +160,7 @@ describe("App", () => {
     expect(wrapper.text()).toContain("正在完成加载");
     expect(wrapper.get(".button-primary").attributes("disabled")).toBeDefined();
 
-    completionHandler({ payload: completion });
+    await completionHandler({ payload: completion.id });
     progressHandler({ payload: finalProgress });
     await flushPromises();
     expect(wrapper.text()).toContain("加载成功 1 个");
@@ -165,15 +168,16 @@ describe("App", () => {
     expect(wrapper.get(".history-count").text()).toBe("1");
     expect(wrapper.find(".operation-status").exists()).toBe(true);
     expect(wrapper.get(".button-primary").attributes("disabled")).toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("get_batch_completion", { id: 1 });
     expect(invoke).toHaveBeenCalledWith("acknowledge_batch_completion", { id: 1 });
     wrapper.unmount();
   });
 
   it("keeps the completion when an older initial response arrives later", async () => {
-    let completionHandler!: (event: { payload: BatchCompletion }) => void;
+    let completionHandler!: (event: { payload: number }) => Promise<void>;
     listen.mockImplementation(async (event, handler) => {
       if (event === "font-batch-complete") {
-        completionHandler = handler as (event: { payload: BatchCompletion }) => void;
+        completionHandler = handler as typeof completionHandler;
       }
       return () => {};
     });
@@ -181,18 +185,21 @@ describe("App", () => {
     const pendingInitial = new Promise<InitialState>(resolve => {
       resolveInitial = resolve;
     });
-    invoke.mockImplementation((command: string) =>
-      command === "get_initial_state" ? pendingInitial : Promise.resolve(undefined),
-    );
-    const wrapper = mount(App);
-    await flushPromises();
-
-    completionHandler({ payload: batchCompletion({
+    const completion = batchCompletion({
       snapshot: { ...emptySnapshot(), fonts: [font] },
       changed: [font.canonicalPath],
       skipped: [],
       errors: [],
-    }) });
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_initial_state") return pendingInitial;
+      if (command === "get_batch_completion") return Promise.resolve(completion);
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await completionHandler({ payload: completion.id });
     resolveInitial(initialState(emptySnapshot(), {
       id: 1,
       operation: "load",
@@ -450,6 +457,13 @@ describe("App", () => {
 
   it("loads all files returned by the picker", async () => {
     mockInitial(emptySnapshot());
+    let completionHandler!: (event: { payload: number }) => Promise<void>;
+    listen.mockImplementation(async (event, handler) => {
+      if (event === "font-batch-complete") {
+        completionHandler = handler as typeof completionHandler;
+      }
+      return () => {};
+    });
     open.mockResolvedValue(["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"]);
     const result: BatchResult = {
       snapshot: { ...emptySnapshot(), fonts: [font] },
@@ -462,6 +476,7 @@ describe("App", () => {
         return Promise.resolve(initialState(emptySnapshot()));
       }
       if (command === "load_fonts") {
+        void completionHandler({ payload: 1 });
         return Promise.resolve(batchCompletion(result));
       }
       return Promise.resolve(undefined);
@@ -475,6 +490,7 @@ describe("App", () => {
     expect(invoke).toHaveBeenCalledWith("load_fonts", {
       paths: ["C:\\Fonts\\A.ttf", "C:\\Fonts\\B.otf"],
     });
+    expect(invoke).not.toHaveBeenCalledWith("get_batch_completion", { id: 1 });
     expect(wrapper.findAll("[data-testid='font-row']")).toHaveLength(1);
   });
 

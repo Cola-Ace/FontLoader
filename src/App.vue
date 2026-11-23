@@ -502,11 +502,27 @@ onMounted(async () => {
     stopDragDropListener = await listen<DragDropPayload>("tauri://drag-drop", event => {
       void handleDragDrop(event.payload);
     });
-    stopCompletionListener = await listen<BatchCompletion>("font-batch-complete", event => {
-      if (batchInvocationActive) {
+    stopCompletionListener = await listen<number>("font-batch-complete", async event => {
+      const id = event.payload;
+      if (batchInvocationActive || id <= completedBatchId) {
         return;
       }
-      applyBatchCompletion(event.payload);
+      try {
+        const completion = await invoke<BatchCompletion | null>("get_batch_completion", { id });
+        if (completion) {
+          applyBatchCompletion(completion);
+        }
+      } catch (error) {
+        if (id <= completedBatchId || id < (operationProgress.value?.id ?? 0)) {
+          return;
+        }
+        completedBatchId = id;
+        busy.value = false;
+        operationProgress.value = null;
+        statusTone.value = "error";
+        statusMessage.value = "无法读取批量操作结果";
+        operationErrors.value = [{ path: "", code: "operation_failed", message: String(error) }];
+      }
     });
     await invoke("window_ready");
     const initial = await invoke<InitialState>("get_initial_state");

@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -98,6 +98,19 @@ async fn get_initial_state(state: State<'_, AppState>) -> Result<InitialState, S
 }
 
 #[tauri::command]
+async fn get_batch_completion(
+    id: u64,
+    state: State<'_, AppState>,
+) -> Result<Option<BatchCompletion>, String> {
+    let ui = state.ui.lock().unwrap();
+    Ok(ui
+        .completion
+        .as_ref()
+        .filter(|completion| completion.id == id)
+        .cloned())
+}
+
+#[tauri::command]
 fn acknowledge_batch_completion(id: u64, state: State<'_, AppState>) {
     let mut ui = state.ui.lock().unwrap();
     if ui
@@ -158,10 +171,16 @@ async fn run_batch(app: AppHandle, batch: Batch) -> Result<BatchCompletion, Stri
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
         let mut progress = progress;
+        let mut last_emit = Instant::now();
         let report = |completed| {
             progress.completed = completed;
-            state.ui.lock().unwrap().progress = Some(progress.clone());
-            let _ = worker_app.emit(BATCH_PROGRESS_EVENT, &progress);
+            let mut ui = state.ui.lock().unwrap();
+            ui.progress.as_mut().unwrap().completed = completed;
+            drop(ui);
+            if completed == progress.total || last_emit.elapsed() >= BATCH_PROGRESS_INTERVAL {
+                let _ = worker_app.emit(BATCH_PROGRESS_EVENT, &progress);
+                last_emit = Instant::now();
+            }
         };
         match batch {
             Batch::Load(paths) => state.core.load_fonts_with_progress(paths, report),
@@ -192,7 +211,7 @@ async fn run_batch(app: AppHandle, batch: Batch) -> Result<BatchCompletion, Stri
         completion
     };
     update_loaded_count(&app, completion.result.snapshot.fonts.len());
-    let _ = app.emit(BATCH_COMPLETION_EVENT, &completion);
+    let _ = app.emit(BATCH_COMPLETION_EVENT, id);
     Ok(completion)
 }
 
@@ -304,6 +323,7 @@ fn loaded_count_label(count: usize) -> String {
 
 const BATCH_PROGRESS_EVENT: &str = "font-batch-progress";
 const BATCH_COMPLETION_EVENT: &str = "font-batch-complete";
+const BATCH_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 fn update_loaded_count(app: &AppHandle, count: usize) {
     let label = loaded_count_label(count);
@@ -554,6 +574,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_initial_state,
+            get_batch_completion,
             acknowledge_batch_completion,
             load_fonts,
             unload_fonts,
