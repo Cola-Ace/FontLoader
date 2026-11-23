@@ -77,39 +77,51 @@ watch(sortMode, nextSortMode => {
   localStorage.setItem("font-loader-sort", nextSortMode);
 });
 
-const faceLabel = (font: FontEntry) =>
-  font.faces.map(face => `${face.family} · ${face.style}`).join("；");
+type IndexedFont = {
+  font: FontEntry;
+  nameKey: string;
+  loadedAtMillis: number;
+  searchFields: string[];
+};
+
+const indexedFonts = computed<IndexedFont[]>(() =>
+  snapshot.value.fonts.map(font => ({
+    font,
+    nameKey: font.faces.map(face => `${face.family} · ${face.style}`).join("；"),
+    loadedAtMillis: Date.parse(font.loadedAt),
+    searchFields: [
+      font.fileName,
+      font.canonicalPath,
+      font.format,
+      ...font.faces.flatMap(face => [face.family, face.style]),
+    ].map(value => value.toLocaleLowerCase()),
+  })),
+);
 
 const nameCollator = new Intl.Collator("zh-CN", {
   numeric: true,
   sensitivity: "base",
 });
 
-function compareFontName(left: FontEntry, right: FontEntry) {
-  const byName = nameCollator.compare(faceLabel(left), faceLabel(right));
+function compareFontName(left: IndexedFont, right: IndexedFont) {
+  const byName = nameCollator.compare(left.nameKey, right.nameKey);
   if (byName !== 0) {
     return byName;
   }
-  const byFileName = nameCollator.compare(left.fileName, right.fileName);
+  const byFileName = nameCollator.compare(left.font.fileName, right.font.fileName);
   return byFileName !== 0
     ? byFileName
-    : nameCollator.compare(left.canonicalPath, right.canonicalPath);
+    : nameCollator.compare(left.font.canonicalPath, right.font.canonicalPath);
 }
 
 const filteredFonts = computed(() => {
   const term = searchTerm.value.trim().toLocaleLowerCase();
   if (!term) {
-    return snapshot.value.fonts;
+    return indexedFonts.value;
   }
-  return snapshot.value.fonts.filter(font => {
-    const searchable = [
-      font.fileName,
-      font.canonicalPath,
-      font.format,
-      ...font.faces.flatMap(face => [face.family, face.style]),
-    ];
-    return searchable.some(value => value.toLocaleLowerCase().includes(term));
-  });
+  return indexedFonts.value.filter(({ searchFields }) =>
+    searchFields.some(value => value.includes(term)),
+  );
 });
 
 const sortedFonts = computed(() => {
@@ -121,7 +133,7 @@ const sortedFonts = computed(() => {
 
   const direction = sortMode.value === "loaded-at-asc" ? 1 : -1;
   return fonts.sort((left, right) => {
-    const byLoadedAt = (Date.parse(left.loadedAt) - Date.parse(right.loadedAt)) * direction;
+    const byLoadedAt = (left.loadedAtMillis - right.loadedAtMillis) * direction;
     return byLoadedAt !== 0 ? byLoadedAt : compareFontName(left, right);
   });
 });
@@ -129,7 +141,7 @@ const sortedFonts = computed(() => {
 const allVisibleSelected = computed(
   () =>
     filteredFonts.value.length > 0 &&
-    filteredFonts.value.every(font => selectedPaths.value.has(font.canonicalPath)),
+    filteredFonts.value.every(({ font }) => selectedPaths.value.has(font.canonicalPath)),
 );
 
 const loadedTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -162,7 +174,7 @@ function setSelection(path: string, selected: boolean) {
 
 function toggleAllVisible(selected: boolean) {
   const next = new Set(selectedPaths.value);
-  for (const font of filteredFonts.value) {
+  for (const { font } of filteredFonts.value) {
     if (selected) {
       next.add(font.canonicalPath);
     } else {
@@ -678,7 +690,7 @@ onUnmounted(() => {
         </div>
 
         <div
-          v-for="font in sortedFonts"
+          v-for="{ font } in sortedFonts"
           :key="font.canonicalPath"
           class="font-row"
           data-testid="font-row"
