@@ -8,6 +8,7 @@ import InterfaceFontSettings from "./InterfaceFontSettings.vue";
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleX,
   Eraser,
   FilePlus2,
   LoaderCircle,
@@ -43,10 +44,11 @@ const initializing = ref(false);
 const actionsBlocked = computed(() => initializing.value || busy.value);
 const operationErrors = ref<OperationError[]>([]);
 const statusMessage = ref("");
-const statusWarning = ref(false);
+const statusTone = ref<"success" | "warning" | "error">("success");
 type OperationProgress = Omit<BatchProgress, "id"> & { id?: number };
 const operationProgress = ref<OperationProgress | null>(null);
 const exitErrors = ref<OperationError[]>([]);
+const exitRetryError = ref("");
 const exitSessionSaveFailed = computed(() =>
   exitErrors.value.some(error => error.code === "session_log_failed"),
 );
@@ -170,13 +172,28 @@ function toggleAllVisible(selected: boolean) {
 }
 
 function summarizeResult(result: BatchResult, action: "加载" | "卸载") {
-  statusWarning.value = false;
-  const messages = [`${action}成功 ${result.changed.length} 个`];
+  const hasErrors = result.errors.length > 0;
+  const failedFonts = result.errors.filter(error => error.path).length;
+  const sessionSaveFailed = result.errors.some(error => error.code === "session_log_failed");
+  const messages: string[] = [];
+  if (result.changed.length || !hasErrors) {
+    messages.push(`${action}成功 ${result.changed.length} 个`);
+  }
   if (result.skipped.length) {
     messages.push(`跳过 ${result.skipped.length} 个`);
   }
-  if (result.errors.length) {
-    messages.push(`失败 ${result.errors.length} 个`);
+  if (failedFonts) {
+    messages.push(`${result.changed.length ? "" : action}失败 ${failedFonts} 个`);
+  }
+  if (sessionSaveFailed) {
+    messages.push("会话记录保存失败");
+  }
+  if (hasErrors && !failedFonts && !sessionSaveFailed) {
+    messages.push(`${action}失败`);
+  }
+  statusTone.value = "success";
+  if (hasErrors) {
+    statusTone.value = result.changed.length ? "warning" : "error";
   }
   statusMessage.value = messages.join("，");
   operationErrors.value = result.errors;
@@ -185,9 +202,11 @@ function summarizeResult(result: BatchResult, action: "加载" | "卸载") {
 
 function scheduleStatusDismiss() {
   clearStatusTimer();
+  if (operationErrors.value.length) {
+    return;
+  }
   statusDismissTimer = window.setTimeout(() => {
     statusMessage.value = "";
-    operationErrors.value = [];
     statusDismissTimer = undefined;
   }, 3000);
 }
@@ -256,7 +275,7 @@ function applyBatchProgress(nextProgress: OperationProgress) {
   ) {
     return;
   }
-  statusWarning.value = false;
+  statusTone.value = "success";
   busy.value = true;
   clearStatusTimer();
   operationErrors.value = [];
@@ -296,6 +315,7 @@ async function runBatch(
     applyBatchCompletion(await invoke<BatchCompletion>(command, args));
   } catch (error) {
     const action = command === "unload_fonts" ? "卸载" : "加载";
+    statusTone.value = "error";
     statusMessage.value = `${action}失败`;
     operationErrors.value = [
       {
@@ -304,7 +324,6 @@ async function runBatch(
         message: String(error),
       },
     ];
-    scheduleStatusDismiss();
   } finally {
     batchInvocationActive = false;
     busy.value = false;
@@ -382,7 +401,7 @@ async function unloadOne(path: string) {
 async function restoreSession() {
   if (!snapshot.value.restoreCandidates.length) {
     operationErrors.value = [];
-    statusWarning.value = true;
+    statusTone.value = "warning";
     statusMessage.value = "暂无上次加载记录，请先选择字体";
     scheduleStatusDismiss();
     return;
@@ -404,7 +423,7 @@ async function dismissRestoreHistory() {
     }
   } catch (error) {
     clearStatusTimer();
-    statusWarning.value = true;
+    statusTone.value = "error";
     statusMessage.value = "无法清除待恢复记录";
     operationErrors.value = [{ path: "", code: "session_log_failed", message: String(error) }];
   } finally {
@@ -413,6 +432,7 @@ async function dismissRestoreHistory() {
 }
 
 async function retryExit(force: boolean) {
+  exitRetryError.value = "";
   busy.value = true;
   operationProgress.value = {
     operation: "unload",
@@ -422,6 +442,9 @@ async function retryExit(force: boolean) {
   try {
     const result = await invoke<ExitResult>("request_exit", { force });
     exitErrors.value = result.errors;
+  } catch (error) {
+    const action = force || exitSessionSaveFailed.value ? "退出" : "重试卸载";
+    exitRetryError.value = `${action}失败。${String(error)}`;
   } finally {
     busy.value = false;
     operationProgress.value = null;
@@ -683,12 +706,13 @@ onUnmounted(() => {
       <section
         v-if="statusMessage || operationErrors.length"
         class="operation-status"
-        :class="{ 'is-warning': statusWarning }"
+        :class="{ 'is-warning': statusTone === 'warning', 'is-error': statusTone === 'error' }"
         aria-live="polite"
       >
         <div v-if="statusMessage" class="status-summary">
           <LoaderCircle v-if="busy" class="status-spinner" :size="16" />
-          <AlertTriangle v-else-if="statusWarning" :size="16" />
+          <CircleX v-else-if="statusTone === 'error'" :size="16" />
+          <AlertTriangle v-else-if="statusTone === 'warning'" :size="16" />
           <CheckCircle2 v-else :size="16" />
            <span>
              {{ statusMessage }}
@@ -711,7 +735,9 @@ onUnmounted(() => {
           <li v-for="error in operationErrors" :key="`${error.path}-${error.code}`">
             <AlertTriangle :size="15" />
             <span>
-              <strong>{{ error.path || "会话日志" }}</strong>
+              <strong v-if="error.path || error.code === 'session_log_failed'">
+                {{ error.path || "会话日志" }}
+              </strong>
               {{ error.message }}
             </span>
           </li>
@@ -732,6 +758,7 @@ onUnmounted(() => {
               <span>{{ error.message }}</span>
             </li>
           </ul>
+          <p v-if="exitRetryError" class="exit-retry-error" role="alert">{{ exitRetryError }}</p>
           <div class="dialog-actions">
             <button class="button button-secondary" type="button" :disabled="actionsBlocked" @click="retryExit(true)">
               仍然退出

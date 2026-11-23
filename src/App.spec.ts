@@ -1,6 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AlertTriangle, CheckCircle2 } from "lucide-vue-next";
+import { AlertTriangle, CheckCircle2, CircleX } from "lucide-vue-next";
 import App from "./App.vue";
 import type {
   AppSnapshot,
@@ -340,6 +340,9 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.get(".operation-status").text()).toContain("加载成功 1 个，失败 1 个");
+    expect(wrapper.get(".operation-status").classes()).toContain("is-warning");
+    expect(wrapper.get(".status-summary").findComponent(AlertTriangle).exists()).toBe(true);
+    expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(false);
     expect(wrapper.get(".error-list").text()).toContain(missingPath);
     expect(wrapper.get(".error-list").text()).toContain("文件不存在");
     expect(wrapper.findAll('[data-testid="font-row"]')).toHaveLength(1);
@@ -689,17 +692,24 @@ describe("App", () => {
     expect(wrapper.get(".status-summary").findComponent(CheckCircle2).exists()).toBe(true);
   });
 
-  it("dismisses a failed operation notice automatically", async () => {
+  it.each([true, false])("keeps a failed operation visible until dismissed (rejected: %s)", async rejected => {
     vi.useFakeTimers();
     try {
       mockInitial(emptySnapshot());
-      open.mockResolvedValue(["C:\\Fonts\\A.ttf"]);
+      open.mockResolvedValue([font.canonicalPath]);
       invoke.mockImplementation((command: string) => {
         if (command === "get_initial_state") {
           return Promise.resolve(initialState(emptySnapshot()));
         }
         if (command === "load_fonts") {
-          return Promise.reject(new Error("加载失败"));
+          return rejected
+            ? Promise.reject(new Error("无法执行加载命令"))
+            : Promise.resolve(batchCompletion({
+                snapshot: emptySnapshot(),
+                changed: [],
+                skipped: [],
+                errors: [{ path: font.canonicalPath, code: "file_missing", message: "文件不存在" }],
+              }));
         }
         return Promise.resolve(undefined);
       });
@@ -709,9 +719,17 @@ describe("App", () => {
       await wrapper.get(".button-primary").trigger("click");
       await flushPromises();
 
-      expect(wrapper.text()).toContain("加载失败");
+      expect(wrapper.get(".status-summary").text()).toContain("加载失败");
+      expect(wrapper.get(".operation-status").classes()).toContain("is-error");
+      expect(wrapper.get(".status-summary").findComponent(CircleX).exists()).toBe(true);
       vi.advanceTimersByTime(3000);
       await flushPromises();
+      const details = wrapper.get(".error-list").text();
+      expect(details).toContain(rejected ? "无法执行加载命令" : "文件不存在");
+      if (!rejected) {
+        expect(details).toContain(font.canonicalPath);
+      }
+      await wrapper.get(".status-dismiss").trigger("click");
       expect(wrapper.find(".operation-status").exists()).toBe(false);
       wrapper.unmount();
     } finally {
@@ -739,7 +757,7 @@ describe("App", () => {
     });
   });
 
-  it("shows exit failures and supports force exit", async () => {
+  it("shows exit retry errors alongside the original failure and supports force exit", async () => {
     mockInitial({
       ...emptySnapshot(),
       exitErrors: [
@@ -753,11 +771,32 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.get("[role='dialog']").text()).toContain("部分字体卸载失败");
+    const dialog = wrapper.get("[role='dialog']");
+    expect(dialog.text()).toContain("部分字体卸载失败");
+    invoke.mockRejectedValueOnce(new Error("无法请求退出"));
+    const retry = dialog.get(".dialog-actions .button-primary");
+    await retry.trigger("click");
+    await flushPromises();
+
+    expect(invoke).toHaveBeenCalledWith("request_exit", { force: false });
+    expect(dialog.get("[role='alert']").text()).toContain("重试卸载失败。Error: 无法请求退出");
+    expect(dialog.text()).toContain(font.canonicalPath);
+    expect(dialog.text()).toContain("RemoveFontResourceExW 返回 0");
+    expect(retry.attributes("disabled")).toBeUndefined();
+
+    invoke.mockRejectedValueOnce("无法关闭窗口");
+    const forceExit = dialog.get(".dialog-actions .button-secondary");
+    await forceExit.trigger("click");
+    await flushPromises();
+
+    expect(dialog.get("[role='alert']").text()).toBe("退出失败。无法关闭窗口");
+
     invoke.mockResolvedValue({ exiting: true, errors: [] });
-    await wrapper.get(".dialog-actions .button-secondary").trigger("click");
+    await forceExit.trigger("click");
     await flushPromises();
 
     expect(invoke).toHaveBeenCalledWith("request_exit", { force: true });
+    expect(wrapper.find("[role='dialog']").exists()).toBe(false);
+    wrapper.unmount();
   });
 });
