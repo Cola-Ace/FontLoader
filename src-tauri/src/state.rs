@@ -111,6 +111,12 @@ impl FontCore {
     {
         let mut result = BatchResult::default();
         let mut loaded_paths = HashSet::new();
+        let mut active_paths = data
+            .fonts
+            .values()
+            .map(|entry| entry.canonical_path.clone())
+            .collect::<Vec<_>>();
+        let mut active_log_needs_cleanup = false;
         let mut completed = 0;
 
         for requested_path in paths {
@@ -145,7 +151,20 @@ impl FontCore {
                         break 'item;
                     }
                 };
+                active_paths.push(canonical_path.clone());
+                if let Err(error) = self.session.write_active(&active_paths) {
+                    active_paths.pop();
+                    result.errors.push(operation_error(
+                        canonical_path,
+                        "session_log_failed",
+                        error.to_string(),
+                    ));
+                    break 'item;
+                }
+                active_log_needs_cleanup = false;
                 if let Err(message) = register_font(&canonical) {
+                    active_paths.pop();
+                    active_log_needs_cleanup = true;
                     result.errors.push(operation_error(
                         canonical_path,
                         "system_load_failed",
@@ -183,17 +202,18 @@ impl FontCore {
             .cloned()
             .collect::<Vec<_>>();
         let candidates_changed = remaining.len() != data.restore_candidates.len();
-        let saved = if !result.changed.is_empty() || candidates_changed {
-            self.write_active(data).and_then(|()| {
-                if candidates_changed {
-                    self.session.write_last(&remaining)?;
-                    data.restore_candidates = remaining;
-                }
-                Ok(())
-            })
+        let saved = if active_log_needs_cleanup {
+            self.session.write_active(&active_paths)
         } else {
             Ok(())
         };
+        let saved = saved.and_then(|()| {
+            if candidates_changed {
+                self.session.write_last(&remaining)?;
+                data.restore_candidates = remaining;
+            }
+            Ok(())
+        });
         if let Err(error) = saved {
             result
                 .errors
@@ -507,6 +527,103 @@ mod tests {
             |completed| unload_progress.push(completed),
         );
         assert_eq!(unload_progress, vec![1, 2]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recovers_font_from_interrupted_batch() {
+        const TEST_DIRECTORY: &str = "FONTLOADER_INTERRUPTED_BATCH_TEST_DIRECTORY";
+        if let Some(root) = std::env::var_os(TEST_DIRECTORY).map(PathBuf::from) {
+            let core = FontCore::new(root.join("state")).unwrap();
+            let paths = ["first.ttf", "second.ttf"]
+                .map(|name| root.join(name).to_string_lossy().into_owned());
+            core.load_fonts_with_progress(paths.into(), |completed| {
+                assert_eq!(completed, 1);
+                std::process::exit(0);
+            });
+            panic!("批次未中断");
+        }
+
+        let fonts_dir = PathBuf::from(std::env::var_os("WINDIR").unwrap()).join("Fonts");
+        let source = fs::read_dir(fonts_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("ttf"))
+            })
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let first = root.join("first.ttf");
+        fs::copy(&source, &first).unwrap();
+        fs::copy(source, root.join("second.ttf")).unwrap();
+        let first = dunce::canonicalize(first).unwrap();
+        let first_path = first.to_string_lossy().into_owned();
+        let state_dir = root.join("state");
+        let files = SessionFiles::new(state_dir.clone()).unwrap();
+
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "state::tests::recovers_font_from_interrupted_batch",
+            ])
+            .env(TEST_DIRECTORY, root)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+
+        let active = files.read_active().unwrap();
+        let core = FontCore::new(state_dir).unwrap();
+        assert!(super::unregister_font(&first).is_err());
+        assert_eq!(active, [first_path.clone()]);
+        assert_eq!(core.snapshot().restore_candidates, [first_path.clone()]);
+        assert!(files.read_active().unwrap().is_empty());
+        assert_eq!(files.read_last().unwrap(), [first_path]);
+
+        let restored = core.restore_last_session_with_progress(|_| {});
+        let unloaded = core.unload_fonts_with_progress(restored.changed.clone(), |_| {});
+        assert_eq!(restored.changed.len(), 1);
+        assert!(restored.errors.is_empty());
+        assert!(unloaded.errors.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn skips_registration_when_active_log_cannot_be_written() {
+        let fonts_dir = PathBuf::from(std::env::var_os("WINDIR").unwrap()).join("Fonts");
+        let source = fs::read_dir(fonts_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("ttf"))
+            })
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let state_dir = directory.path().join("state");
+        let core = FontCore::new(state_dir.clone()).unwrap();
+        fs::create_dir(state_dir.join("active-session.json")).unwrap();
+        let font = directory.path().join("sample.ttf");
+        fs::copy(source, &font).unwrap();
+        let font = dunce::canonicalize(font).unwrap();
+        let path = font.to_string_lossy().into_owned();
+
+        let result = core.load_fonts_with_progress(vec![path.clone()], |_| {});
+
+        assert!(super::unregister_font(&font).is_err());
+        assert!(result.changed.is_empty());
+        assert!(result.snapshot.fonts.is_empty());
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].path, path);
+        assert_eq!(result.errors[0].code, "session_log_failed");
     }
 
     #[cfg(windows)]
