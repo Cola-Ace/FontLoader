@@ -132,13 +132,14 @@ const allVisibleSelected = computed(
     filteredFonts.value.every(font => selectedPaths.value.has(font.canonicalPath)),
 );
 
-const loadedTime = (value: string) =>
-  new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+const loadedTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+const loadedTime = (value: string) => loadedTimeFormatter.format(new Date(value));
 
 function applySnapshot(next: AppSnapshot) {
   snapshot.value = next;
