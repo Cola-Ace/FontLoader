@@ -150,6 +150,10 @@ h1 {
   background: transparent;
 }
 
+.search-field input::-webkit-search-cancel-button {
+  display: none;
+}
+
 .button,
 .icon-button {
   display: inline-flex;
